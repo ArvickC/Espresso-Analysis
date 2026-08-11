@@ -3,14 +3,19 @@ import time
 from datetime import datetime
 from pathlib import Path
 import BLE_logger as varia
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from display import AppState
 
 class ShotLogger:
-    def __init__(self, out_dir: str = './shots'):
+    def __init__(self, out_dir: str = './shots', app: "AppState | None" = None):
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.rows: list[tuple[float, float]] = []
         self.t0: float | None = None
         self.recording = False
+        self.app = app
 
     def start_recording(self):
         self.t0 = time.monotonic()
@@ -28,6 +33,8 @@ class ShotLogger:
 
         elapsed = time.monotonic() - self.t0
         self.rows.append((elapsed, weight))
+        if self.app is not None:
+            self.app.add_point(elapsed, weight)
         # print(f"\r  t={elapsed:6.2f}s  weight={weight:7.2f}g", end="\n", flush=True)
 
     def save(self, prefix: str = '') -> Path:

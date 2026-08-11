@@ -5,6 +5,7 @@ from bleak import BleakClient
 
 from ShotLogger import ShotLogger
 from BLE_logger import *
+from display import AppState, State
 
 try:
     from gpiozero import Button
@@ -42,12 +43,12 @@ async def wait_for_trigger(_button=None) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, input)
 
-async def run_shot_session(device: BLEDevice) -> Path:
+async def run_shot_session(device: BLEDevice, app: AppState) -> Path:
     async with BleakClient(device) as client:
         print(f"Connected to {device.name}")
 
         print("Instantiating Logger...")
-        logger = ShotLogger()
+        logger = ShotLogger(app=app)
 
         print("Subscribing to weight notifications...")
         await client.start_notify(CHAR_UUID, logger.handle_notification)
@@ -61,6 +62,8 @@ async def run_shot_session(device: BLEDevice) -> Path:
         await client.write_gatt_char(CMD_UUID, tare_cmd(), response=False)
 
         print("Tared. Press to start logging a shot.")
+        app.live_points.clear()
+        app.state = State.LOGGING
         await wait_for_trigger(button)
         logger.start_recording()
 

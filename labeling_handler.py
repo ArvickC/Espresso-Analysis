@@ -2,6 +2,10 @@ import csv
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from display import AppState
 
 PROMPT_LABELS = {'under', 'balanced', 'over', 'discard'}
 MANIFEST_COLUMNS = [
@@ -67,16 +71,26 @@ def prompt_label() -> str:
         print(f"Didn't recognize '{raw}'. Please try again.")
 
 
-async def pre_label_shot(defaults: ShotDefaults):
+async def pre_label_shot(defaults: ShotDefaults, app: "AppState"):
     """
     Informational data collected before the shot is pulled.
     """
-    print(f"\n--- Labeling Shot ---")
-    defaults.bean_name = _prompt("Bean name", defaults.bean_name)
-    defaults.roast_date = _prompt("Roast date (YYYY-MM-DD)", defaults.roast_date)
-    defaults.open_date = _prompt("Bag opened date (YYYY-MM-DD)", defaults.open_date)
-    defaults.dose_g = _prompt("Dose (g)", defaults.dose_g)
-    defaults.grind_setting = _prompt("Grind setting", defaults.grind_setting)
+    from display import request_form  # lazy import
+
+    fields = [
+        ("Bean name", defaults.bean_name),
+        ("Roast date (YYYY-MM-DD)", defaults.roast_date),
+        ("Bag opened date (YYYY-MM-DD)", defaults.open_date),
+        ("Dose (g)", defaults.dose_g),
+        ("Grind setting", defaults.grind_setting),
+    ]
+    result = await request_form(app, fields)
+
+    defaults.bean_name = result["Bean name"]
+    defaults.roast_date = result["Roast date (YYYY-MM-DD)"]
+    defaults.open_date = result["Bag opened date (YYYY-MM-DD)"]
+    defaults.dose_g = result["Dose (g)"]
+    defaults.grind_setting = result["Grind setting"]
     defaults.save()
 
 async def label_shot(defaults: ShotDefaults, curve_path: Path) -> tuple[dict, str]:
