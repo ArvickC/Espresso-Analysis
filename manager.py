@@ -17,41 +17,56 @@ except ImportError:
     ROAST_DATE = None
     OPEN_DATE = None
 
+REC_THRESHOLD = 0.07
+
 defaults = ShotDefaults.load(fallback=ShotDefaults(GRIND_SETTING, DOSE_G, BEAN_NAME, ROAST_DATE, OPEN_DATE))
 model_path = Path("./shot_cnn_{}.pt") # Saved Model
 
 async def pull_shot(app: AppState):
+    # Boot and search for scale
     app.state = State.BOOT
     device = await find_scale(known_address=KNOWN_ADDRESS)
     if device is None:
         print("No varia AKU found.")
         return
 
+    # Get pre-shot statistics
     await pre_label_shot(defaults, app)
     app.state = State.GRINDING
+    await app.key_down_event.wait() # Wait to continue
+    app.key_down_event.clear()
 
-    await app.grind_event.wait()
-    app.grind_event.clear()
-
+    # Pull shot
     path = await run_shot_session(device, app=app)
 
     if model_path.exists():
-        # predict shot
+        # Predict shot
         lab, probs = predict_shot(path, model_path)
         app.result_label = lab
-        app.result_probs = probs
+        app.result_probs = dict(zip(LABELS, (float(p) for p in probs)))
         print(f"Prediction: {lab}")
         for lab, p in zip(LABELS, probs):
             print(f"  {lab:9s} {p:.3f}")
 
-    row, label = await label_shot(defaults, path)
+    # Label shot for model training
+    row, label = await label_shot(defaults, path, app)
     append_manifest(row)
     if not app.result_label:
         app.result_label = label
 
+    # Lazy recommendations
+    diff = app.result_probs['over'] - app.result_probs['under']
+    if diff > REC_THRESHOLD:
+        app.rec = "grind coarser"
+    elif diff < -REC_THRESHOLD:
+        app.rec = "grind finer"
+    else:
+        app.rec = "extraction is balanced"
+
+    # Display results
     app.state = State.RESULTS
 
-    if label != 'discard':
+    if label != 'discard': # Retrain model
         update_model(Path("./shots"))
 
 async def main():

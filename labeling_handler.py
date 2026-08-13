@@ -90,14 +90,18 @@ async def pre_label_shot(defaults: ShotDefaults, app: "AppState"):
     defaults.roast_date = result["Roast date (YYYY-MM-DD)"]
     defaults.open_date = result["Bag opened date (YYYY-MM-DD)"]
     defaults.dose_g = result["Dose (g)"]
+    app.dose = float(result["Dose (g)"])
     defaults.grind_setting = result["Grind setting"]
     defaults.save()
 
-async def label_shot(defaults: ShotDefaults, curve_path: Path) -> tuple[dict, str]:
+async def label_shot(defaults: ShotDefaults, curve_path: Path, app: "AppState") -> tuple[dict, str]:
     """
     Labeling intended to be done after the shot is pulled and tasted.
     """
-    label = prompt_label()
+    from display import State, request_choice # lazy import
+
+    app.state = State.POST_LABELING
+    label = await request_choice(app, "LABEL THIS SHOT", list(PROMPT_LABELS))
 
     row = {
         "shot_id": curve_path.stem,
@@ -110,7 +114,8 @@ async def label_shot(defaults: ShotDefaults, curve_path: Path) -> tuple[dict, st
         row.update({k: "" for k in MANIFEST_COLUMNS if k not in row})
         return row, label
 
-    notes = input("Notes (tasting notes, channeling, etc; optional): ").strip()
+    # notes = input("Notes (tasting notes, channeling, etc; optional): ").strip()
+    notes = ""
 
     row.update({
         "grind_setting": defaults.grind_setting,
@@ -118,7 +123,7 @@ async def label_shot(defaults: ShotDefaults, curve_path: Path) -> tuple[dict, st
         "bean_name": defaults.bean_name,
         "roast_date": defaults.roast_date,
         "open_date": defaults.open_date,
-        "notes": notes,
+        "notes": notes if notes is not None else "",
     })
 
     return row, label
