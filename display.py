@@ -8,6 +8,8 @@ import re
 import math
 
 RES = (320, 240)
+HEADER_POS = (-1, 1)
+FOOTER_POS = (-1, RES[1] - 22)
 SCALE = 3
 FPS = 30
 
@@ -134,7 +136,7 @@ def _tick_marks(low, hi, target=4):
         return [low]
     raw_step = span / target
     mag = 10 ** math.floor(math.log10(raw_step))
-    for m in (1, 2, 2.5, 5, 10):
+    for m in (1, 2, 3, 5, 10):
         step = m * mag
         if step >= raw_step:
             break
@@ -206,8 +208,8 @@ def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float):
     bg = load_background(BEANS_DIR, RES)
     surface.blit(bg, (0, 0))
 
-    text(surface, font, "LABELING SHOT", (-1, 6), AMBER)
-    text(surface, font, "ENTER: next field  BACKSPACE: edit", (-1, RES[1] - 16), GRID)
+    text(surface, font, "LABEL SHOT", HEADER_POS, AMBER)
+    text(surface, font, "ENTER: next field", FOOTER_POS, GRID)
 
     cursor = "_" if int(time.monotonic() * 2) % 2 == 0 else " "  # ~2Hz blink
     y = 32
@@ -222,16 +224,16 @@ def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float):
 def draw_grinding(surface: pygame.Surface, app: AppState, font, dt: float):
     # surface.fill(BG_COLOR)
     _draw_animated(surface, app, font, app.grind_anim, dt, "GRINDING...", AMBER)
-    text(surface, font, "GRINDING...", (-1, RES[1] - 60), AMBER)
+    text(surface, font, "GRIND BEANS", HEADER_POS, AMBER)
 
 def draw_prepping(surface: pygame.Surface, app: AppState, font, dt: float):
     _draw_animated(surface, app, font, app.puck_prep_anim, dt, "PREPPING...", AMBER)
-    text(surface, font, "TARE SCALE...", (-1, RES[1] - 60), AMBER)
+    text(surface, font, "TARE SCALE", HEADER_POS, AMBER)
 
 def draw_logging(surface: pygame.Surface, app: AppState, font, dt: float):
     # surface.fill(BG_COLOR)
-    text(surface, font, "PULLING SHOT", (10, 4), GREEN)
-    draw_live_graph(surface, app.dose, app.live_points, rect=(25, 27, RES[0] - 52, RES[1] - 53), font=font)
+    text(surface, font, "PULLING SHOT", HEADER_POS, AMBER)
+    draw_live_graph(surface, app.dose, app.live_points, rect=(26, 27, RES[0] - 53, RES[1] - 53), font=font)
 
 def draw_live_graph(surface, dose, points, rect, font, gradient = True,
                     emphasize_zero = True, tick_labels = True):
@@ -335,17 +337,17 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
         y = y_of_w(wt)
         color = ZERO_W if (abs(wt) < 1e-9 and emphasize_zero) else GRID_W
         width = 2 if (abs(wt) < 1e-9 and emphasize_zero) else 1
-        pygame.draw.line(surface, color, (x0, y), (x0 + w, y), width)
+        pygame.draw.line(surface, color, (x0, y), (x0 + w, y), 1)
         if tick_labels:
-            text(surface, font, f"{wt:g}", (x0 - 4, y - 6), LABEL_W)
+            text(surface, font, f"{wt:g}", (5, y - 10), LABEL_W)
 
     for f in _tick_marks(min_f, max_f):
         y = y_of_f(f)
         color = ZERO_F if (abs(f) < 1e-9 and emphasize_zero) else GRID_F
         width = 2 if (abs(f) < 1e-9 and emphasize_zero) else 1
-        pygame.draw.line(surface, color, (x0, y), (x0 + w, y), width)
+        pygame.draw.line(surface, color, (x0, y), (x0 + w, y), 1)
         if tick_labels:
-            text(surface, font, f"{f:g}", (x0 + w + 4, y - 6), LABEL_F)
+            text(surface, font, f"{f:g}", (x0 + w + 10, y - 10), LABEL_F)
 
     weights_smoothed = _moving_average(weights, window=5)
     flows_smoothed = _moving_average(flows, window=5)
@@ -367,31 +369,31 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
 
     w_color = _lerp_color(GRAPH_W, GREEN, _proximity(cur_w, TARGET_W, TOL_W))
     f_color = _lerp_color(GRAPH_F, CYAN, _proximity(cur_f, TARGET_F, TOL_F))
-    text(surface, font, f"{cur_w:.2f}g", (x0 + 50, RES[1] - 16), w_color)
-    text(surface, font, f"{cur_f:.1f}g/s", (x0 + w - 39 - 50, RES[1] - 16), f_color)
+    text(surface, font, f"{cur_w:.2f}g", (x0 + 20, FOOTER_POS[1]), w_color)
+    text(surface, font, f"{cur_f:.1f}g/s", (x0 + w - 39 - 50, FOOTER_POS[1]), f_color)
 
 
 def draw_post_labeling(surface: pygame.Surface, app: AppState, font, dt: float):
-    text(surface, font, app.choice_prompt or "LABEL THIS SHOT", (-1, 6), AMBER)
-    text(surface, font, "UP/DOWN+ENTER, or press a letter", (-1, surface.get_height() - 16), GRID)
+    text(surface, font, app.choice_prompt or "LABEL THIS SHOT", HEADER_POS, AMBER)
+    # text(surface, font, "UP/DOWN + ENTER", (-1, surface.get_height() - 25), GRID)
 
-    y = 28
+    y = 30
     for i, option in enumerate(app.choice_options):
         active = i == app.choice_active_index
-        color = GREEN if active else AMBER
+        color = GREEN if active else GRID
         prefix = "> " if active else "  "
         text(surface, font, f"{prefix}{option.upper()}", (29, y), color)
-        y += 14
+        y += 20
 
 
 def draw_result(surface: pygame.Surface, app: AppState, font, dt: float):
     label = app.result_label or "?"
-    text(surface, font, f"RESULT: {label.upper()}", (-1, 6), AMBER)
-    y = 28
+    text(surface, font, f"RESULT: {label.upper()}", HEADER_POS, AMBER)
+    y = 30
     if app.result_probs:
         for lab, p in app.result_probs.items():
             text(surface, font, f"{lab:9s} {p:.2f}", (29, y), GREEN)
-            y += 14
+            y += 20
     if app.rec:
         text(surface, font, app.rec, (29, y + 6), AMBER)
 
@@ -441,7 +443,7 @@ async def run_display(app: AppState, fullscreen: bool = False):
     pygame.display.set_caption("shot logger display")
 
     internal = pygame.Surface(RES)
-    font = pygame.font.SysFont("courier", 11)
+    font = pygame.font.SysFont("courier", 20)
     clock = pygame.time.Clock()
 
     if app.bg_image is None:
@@ -597,15 +599,15 @@ async def _demo(draw_graph = False):
     app.start_event.clear()
     print("Boot animation playing...")
 
-    await asyncio.sleep(2)
-    print("Label animation playing...")
-    app.state = State.LABELING
-    await asyncio.sleep(2)
-    print("Grinding animation playing...")
-    app.state = State.GRINDING
-    await asyncio.sleep(2)
-    print("Prepping animation playing...")
-    app.state = State.PREPPING
+    # await asyncio.sleep(2)
+    # print("Label animation playing...")
+    # app.state = State.LABELING
+    # await asyncio.sleep(2)
+    # print("Grinding animation playing...")
+    # app.state = State.GRINDING
+    # await asyncio.sleep(2)
+    # print("Prepping animation playing...")
+    # app.state = State.PREPPING
     await asyncio.sleep(2)
     if draw_graph:
         print("Logging animation playing...")
