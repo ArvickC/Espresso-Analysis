@@ -1,3 +1,7 @@
+"""
+A simple script to test the BLE connection and commands to the varia aku scale.
+"""
+
 import asyncio
 from bleak import BleakClient
 from ShotLogger import ShotLogger

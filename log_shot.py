@@ -8,6 +8,11 @@ from BLE_logger import *
 from display import AppState, State
 
 def _expand_uuid(uuid: str) -> str:
+    """
+    Converts a 16-bit or 32-bit UUID to a full 128-bit UUID string.
+    :param uuid: The 16-bit or 32-bit UUID to convert.
+    :return: The full 128-bit UUID string.
+    """
     return f'0000{uuid.lower()}-0000-1000-8000-00805f9b34fb'
 
 SERVICE_UUID = _expand_uuid("FFF0")

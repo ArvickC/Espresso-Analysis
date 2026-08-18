@@ -10,16 +10,17 @@ import math
 RES = (320, 240)
 HEADER_POS = (-1, 1)
 FOOTER_POS = (-1, RES[1] - 22)
-SCALE = 3
+SCALE = 3 # scale up for debug viewing
 FPS = 30
 
+# Colors
 GREEN = (60, 255, 120)
 AMBER = (255, 176, 0)
 CYAN = (80, 220, 255)
 BG_COLOR = (8, 8, 10)
 GRID = (30, 30, 30)
 
-FLOW_WINDOW_S = 0.25 # lookback window
+FLOW_WINDOW_S = 0.25 # lookback window for crude flow-rate calculation
 DEFAULT_RESET_TIMEOUT = 120 # seconds before idle again
 CROSSFADE_DURATION = 0.25 # seconds
 
@@ -43,6 +44,7 @@ class State(Enum):
     POST_LABELING = auto()
     RESULTS = auto()
 
+# States where the graph is docked to the bottom of the screen
 GRAPH_DOCKED_STATES = {State.POST_LABELING, State.RESULTS}
 
 @dataclass
@@ -80,7 +82,13 @@ class AppState:
     grind_anim: "Animation | None" = None
     puck_prep_anim: "Animation | None" = None
 
-    def add_point(self, elapsed: float, weight: float):
+    def add_point(self, elapsed: float, weight: float) -> None:
+        """
+        Adds a new point to the live graph, calculating flow rate
+        based on the last point that is at least FLOW_WINDOW_S seconds ago.
+        :param elapsed: Elapsed time in seconds (x-axis)
+        :param weight: Weight in grams (y-axis)
+        """
         flow = 0.0
         for t, w, _ in reversed(self.live_points):
             dt = elapsed - t
@@ -90,35 +98,41 @@ class AppState:
         self.live_points.append((elapsed, weight, flow))
 
 class Animation:
+    """
+    Simple animation class that cycles through a list of frames at a given FPS.
+    """
     def __init__(self, frames: list[pygame.Surface], fps: float = 24.0, loop: bool = True):
         self.frames = frames
         self.frame_duration = 1.0/fps
         self.loop = loop
         self.elapsed = 0.0
 
-    def reset(self):
+    def reset(self) -> None:
         self.elapsed = 0.0
 
-    def update(self, dt: float):
+    def update(self, dt: float) -> None:
         self.elapsed += dt
 
     def finished(self) -> bool:
         return not self.loop and self.elapsed >= self.frame_duration * len(self.frames)
 
     def current_frame(self) -> pygame.Surface:
+        """
+        Returns the current frame based on elapsed time.
+        """
         idx = int(self.elapsed / self.frame_duration)
         idx = idx % len(self.frames) if self.loop else min(idx, len(self.frames) - 1)
         return self.frames[idx]
 
-def text(surface, font, s, pos, color):
+def text(surface, font, s, pos, color) -> None:
     rendered = font.render(s, False, color)
-    if pos[0] < 0 and pos[1] < 0:
+    if pos[0] < 0 and pos[1] < 0: # center along x-axis and y-axis
         rect = rendered.get_rect(midtop=(surface.get_width() // 2, surface.get_height() // 2))
         surface.blit(rendered, rect)
-    elif pos[0] < 0:
+    elif pos[0] < 0: # center along x-axis
         rect = rendered.get_rect(midtop=(surface.get_width() // 2, pos[1]))
         surface.blit(rendered, rect)
-    elif pos[1] < 0:
+    elif pos[1] < 0: # center along y-axis
         rect = rendered.get_rect(midbottom=(pos[0], surface.get_height() // 2))
         surface.blit(rendered, rect)
     else:
@@ -130,7 +144,15 @@ def _natural_key(path: Path):
 def _dim(color, factor=0.35):
     return tuple(int(c * factor) for c in color)
 
-def _tick_marks(low, hi, target=4):
+def _tick_marks(low, hi, target=4) -> list[float]:
+    """
+    Generates a list of "nice" tick marks between low and hi,
+    aiming for approximately target ticks.
+    :param low: The lower bound of the range.
+    :param hi: The upper bound of the range.
+    :param target: The approximate number of ticks to generate.
+    :return: A list of tick mark values.
+    """
     span = hi - low
     if span <= 0:
         return [low]
@@ -149,6 +171,13 @@ def _tick_marks(low, hi, target=4):
     return ticks
 
 async def request_form(app: AppState, fields: list[tuple[str, str]]) -> dict[str, str] | None:
+    """
+    Requests a form to be filled out by the user.
+    The form consists of a list of (label, default_value) pairs.
+    :param app: The application state.
+    :param fields: A list of (label, default_value) pairs representing the form fields.
+    :return: A dictionary mapping field labels to user-provided values, or None if the form was canceled.
+    """
     app.form_fields = [[label, default] for label, default in fields]
     app.form_active_index = 0
     app.form_result = None
@@ -159,6 +188,13 @@ async def request_form(app: AppState, fields: list[tuple[str, str]]) -> dict[str
     return app.form_result
 
 async def request_choice(app: AppState, prompt: str, choices: list[str]) -> str:
+    """
+    Requests the user to make a choice from a list of options.
+    :param app: The application state.
+    :param prompt: The prompt to display to the user.
+    :param choices: A list of choice options.
+    :return: The choice selected by the user.
+    """
     app.choice_prompt = prompt
     app.choice_options = list(choices)
     app.choice_active_index = 0
@@ -170,6 +206,12 @@ async def request_choice(app: AppState, prompt: str, choices: list[str]) -> str:
     return app.choice_result
 
 def load_frame_sequence(directory: str, size: tuple[int, int] | None = None) -> list[pygame.Surface]:
+    """
+    Loads a sequence of PNG frames from a directory and optionally resizes them.
+    :param directory: The directory containing PNG frames.
+    :param size: Optional tuple specifying the (width, height) to resize the frames to.
+    :return: A list of loaded (and optionally resized) pygame.Surface objects.
+    """
     paths = sorted(Path(directory).glob("*.png"), key=_natural_key)
     if not paths:
         raise FileNotFoundError(f"No PNG frames found in {directory}")
@@ -183,8 +225,19 @@ def load_frame_sequence(directory: str, size: tuple[int, int] | None = None) -> 
     return frames
 
 def _draw_animated(surface, app, font, anim: "Animation | None", dt: float,
-                    fallback_label: str, fallback_color, fallback_progress: bool = False):
-    # surface.fill(BG_COLOR)
+                    fallback_label: str, fallback_color, fallback_progress: bool = False) -> None:
+    """
+    Draws an animated sequence on the given surface, or a fallback label and progress
+    if the animation is not available.
+    :param surface: The pygame surface to draw on.
+    :param app: The application state.
+    :param font: The font to use for rendering text.
+    :param anim: The animation to draw, or None to use the fallback.
+    :param dt: The time delta since the last frame.
+    :param fallback_label: The label to display if the animation is not available.
+    :param fallback_color: The color to use for the fallback label and progress.
+    :param fallback_progress: Whether to display a progress bar for the fallback.
+    """
     if anim is not None:
         anim.update(dt)
         frame = anim.current_frame()
@@ -198,13 +251,13 @@ def _draw_animated(surface, app, font, anim: "Animation | None", dt: float,
             pygame.draw.rect(surface, fallback_color, (0, RES[1] // 2 - 1, w, 2))
             app.boot_frame += 1
 
-def draw_idle(surface: pygame.Surface, app: AppState, font, dt: float):
+def draw_idle(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     _draw_animated(surface, app, font, app.idle_anim, dt, "READY", GREEN)
 
-def draw_boot(surface: pygame.Surface, app: AppState, font, dt: float):
+def draw_boot(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     _draw_animated(surface, app, font, app.boot_anim, dt, "CONNECTING...", AMBER)
 
-def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float):
+def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     bg = load_background(BEANS_DIR, RES)
     surface.blit(bg, (0, 0))
 
@@ -221,29 +274,33 @@ def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float):
         text(surface, font, shown_value, (29, y + 18), color)
         y += 36
 
-def draw_grinding(surface: pygame.Surface, app: AppState, font, dt: float):
-    # surface.fill(BG_COLOR)
+def draw_grinding(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     _draw_animated(surface, app, font, app.grind_anim, dt, "GRINDING...", AMBER)
     text(surface, font, "GRIND BEANS", HEADER_POS, AMBER)
 
-def draw_prepping(surface: pygame.Surface, app: AppState, font, dt: float):
+def draw_prepping(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     _draw_animated(surface, app, font, app.puck_prep_anim, dt, "PREPPING...", AMBER)
     text(surface, font, "TARE SCALE", HEADER_POS, AMBER)
 
-def draw_logging(surface: pygame.Surface, app: AppState, font, dt: float):
-    # surface.fill(BG_COLOR)
+def draw_logging(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     text(surface, font, "PULLING SHOT", HEADER_POS, AMBER)
     draw_live_graph(surface, app.dose, app.live_points, rect=(26, 27, RES[0] - 53, RES[1] - 53), font=font)
 
 def draw_live_graph(surface, dose, points, rect, font, gradient = True,
-                    emphasize_zero = True, tick_labels = True):
+                    emphasize_zero = True, tick_labels = True) -> None:
     """
     Draws weight (green, left scale) and flow-rate (cyan, right scale) on
-    the same plot area. Each series is auto-scaled independently -- they
-    don't share units, so a shared scale would flatten one or the other.
+    the same plot area. Each series is auto-scaled independently.
+    :param surface: The pygame surface to draw on.
+    :param dose: The target dose in grams (optional).
+    :param points: A list of (elapsed_s, weight_g, flow_g_s) tuples.
+    :param rect: A tuple (x, y, width, height) defining the drawing area.
+    :param font: The pygame font to use for text.
+    :param gradient: Whether to use a gradient for the lines.
+    :param emphasize_zero: Whether to emphasize the zero line.
+    :param tick_labels: Whether to draw tick labels.
     """
     x0, y0, w, h = rect
-    # pygame.draw.rect(surface, GRID, rect, width=1)
     if len(points) < 2:
         return
 
@@ -257,16 +314,31 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
     cur_f, cur_w = flows[-1], weights[-1]
     span_f = (max_f - min_f) or 1.0
 
-    def to_x(t):
+    def to_x(t) -> int:
+        """
+        Maps a time value to an x-coordinate in the graph area.
+        """
         return x0 + int((t / max_t) * w)
 
-    def y_of_w(wt):
+    def y_of_w(wt) -> int:
+        """
+        Maps a weight value to a y-coordinate in the graph area.
+        """
         return y0 + h - int((wt / max_w) * h)
 
-    def y_of_f(f):
+    def y_of_f(f) -> int:
+        """
+        Maps a flow value to a y-coordinate in the graph area.
+        """
         return y0 + h - int(((f - min_f) / span_f) * h)
 
-    def _moving_average(values, window=5):
+    def _moving_average(values, window=5) -> list[float]:
+        """
+        Computes the moving average of a list of values.
+        :param values: The list of values.
+        :param window: The window size for the moving average.
+        :return: A list of the moving average values.
+        """
         if window <= 1 or len(values) < 2:
             return values[:]
         out = []
@@ -276,7 +348,13 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
             out.append(sum(chunk) / len(chunk))
         return out
 
-    def _catmull_rom_points(pts, segments=8):
+    def _catmull_rom_points(pts, segments=8) -> list[tuple[float, float]]:
+        """
+        Computes the Catmull-Rom spline points for a given set of points.
+        :param pts: The list of points.
+        :param segments: The number of segments between each pair of points.
+        :return: A list of the interpolated points.
+        """
         if len(pts) < 3:
             return pts
 
@@ -298,24 +376,35 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
         out.append(pts[-1])
         return out
 
-    def _lerp_color(c1, c2, t):
+    def _lerp_color(c1, c2, t) -> tuple[int, ...]:
+        """
+        Linearly interpolates between two colors.
+        """
         t = max(0.0, min(1.0, t))
         return tuple(int(c1[i] + (c2[i] - c1[i]) * t) for i in range(3))
 
-    def _proximity(value, target, tol):
+    def _proximity(value, target, tol) -> float:
+        """
+        Computes a proximity factor between 0 and 1 based on
+        how close value is to target within a tolerance.
+        """
         if tol <= 0:
             return 1.0 if value == target else 0.0
         d = abs(target - value)
         return max(0.0, 1 - d / tol)
 
     def _draw_grad_line_by_y(surface, pts, y_target, y_tol,
-                             base_color, full_color, width=1):
+                             base_color, full_color, width=1) -> None:
+        """
+        Draws a line with a color gradient based on the y-coordinate proximity to a target value.
+        """
         for (x1, y1), (x2, y2) in zip(pts, pts[1:]):
             avg_y = (y1 + y2) / 2
             t = _proximity(avg_y, y_target, y_tol)
             color = _lerp_color(base_color, full_color, t)
             pygame.draw.line(surface, color, (x1, y1), (x2, y2), width)
 
+    # Colors
     ZERO_W = _dim(GREEN, 0.4)
     ZERO_F = _dim(CYAN, 0.4)
     LABEL_W = _dim(GREEN, 0.4)
@@ -328,11 +417,12 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
     if dose is not None:
         TARGET_W = float(dose) * 2.0
     else:
-        TARGET_W = 38.0
+        TARGET_W = 38.0 # assume 19g dose
 
-    TARGET_F = TARGET_W / 27.5
-    TOL_W, TOL_F = 6.0, 0.6
+    TARGET_F = TARGET_W / 27.5 # assume ~27.5s shot time
+    TOL_W, TOL_F = 6.0, 0.6 # arbitrary tolerances for color gradient
 
+    # Draw graph scales
     for wt in _tick_marks(0, max_w):
         y = y_of_w(wt)
         color = ZERO_W if (abs(wt) < 1e-9 and emphasize_zero) else GRID_W
@@ -369,13 +459,17 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
 
     w_color = _lerp_color(GRAPH_W, GREEN, _proximity(cur_w, TARGET_W, TOL_W))
     f_color = _lerp_color(GRAPH_F, CYAN, _proximity(cur_f, TARGET_F, TOL_F))
+
+    # Display important values
     text(surface, font, f"{cur_w:.2f}g", (x0 + 20, FOOTER_POS[1]), w_color)
     text(surface, font, f"{cur_f:.1f}g/s", (x0 + w - 39 - 50, FOOTER_POS[1]), f_color)
 
 
-def draw_post_labeling(surface: pygame.Surface, app: AppState, font, dt: float):
+def draw_post_labeling(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
+    """
+    Draws the post-shot labeling interface, allowing the user to select from a list of options.
+    """
     text(surface, font, app.choice_prompt or "LABEL THIS SHOT", HEADER_POS, AMBER)
-    # text(surface, font, "UP/DOWN + ENTER", (-1, surface.get_height() - 25), GRID)
 
     y = 30
     for i, option in enumerate(app.choice_options):
@@ -386,7 +480,10 @@ def draw_post_labeling(surface: pygame.Surface, app: AppState, font, dt: float):
         y += 20
 
 
-def draw_result(surface: pygame.Surface, app: AppState, font, dt: float):
+def draw_result(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
+    """
+    Draws the results screen, displaying the result label and probabilities.
+    """
     label = app.result_label or "?"
     text(surface, font, f"RESULT: {label.upper()}", HEADER_POS, AMBER)
     y = 30
@@ -415,7 +512,7 @@ def load_background(path: str, size: tuple[int, int]) -> pygame.Surface | None:
     img = pygame.image.load(str(p)).convert()
     return pygame.transform.scale(img, size)
 
-def render_scene(surface: pygame.Surface, app: AppState, font, dt: float):
+def render_scene(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     if app.bg_image is not None:
         surface.blit(app.bg_image, (0, 0))
     else:
@@ -435,17 +532,10 @@ def render_scene(surface: pygame.Surface, app: AppState, font, dt: float):
     else:
         DRAW_FUNCS[app.state](surface, app, font, dt)
 
-async def run_display(app: AppState, fullscreen: bool = False):
-    pygame.init()
-    flags = pygame.FULLSCREEN if fullscreen else 0
-    size = RES if fullscreen else (RES[0] * SCALE, RES[1] * SCALE)
-    window = pygame.display.set_mode(size, flags)
-    pygame.display.set_caption("shot logger display")
-
-    internal = pygame.Surface(RES)
-    font = pygame.font.SysFont("courier", 20)
-    clock = pygame.time.Clock()
-
+def load_assets(app: AppState) -> None:
+    """
+    Loads all necessary assets into the application state.
+    """
     if app.bg_image is None:
         app.bg_image = load_background(BACKGROUND_DIR, RES)
 
@@ -476,6 +566,24 @@ async def run_display(app: AppState, fullscreen: bool = False):
             app.puck_prep_anim = Animation(frames, fps=24, loop=True)
         except FileNotFoundError:
             pass
+
+async def run_display(app: AppState, fullscreen: bool = False) -> None:
+    """
+    Runs the main display loop, rendering the application state to the screen.
+    :param app: The application state.
+    :param fullscreen: Whether to run in fullscreen mode.
+    """
+    pygame.init()
+    flags = pygame.FULLSCREEN if fullscreen else 0
+    size = RES if fullscreen else (RES[0] * SCALE, RES[1] * SCALE)
+    window = pygame.display.set_mode(size, flags)
+    pygame.display.set_caption("espresso analysis")
+
+    internal = pygame.Surface(RES)
+    font = pygame.font.SysFont("courier", 20)
+    clock = pygame.time.Clock()
+
+    load_assets(app)
 
     app.live_points = [(0, 0, 0)]
 
@@ -514,7 +622,7 @@ async def run_display(app: AppState, fullscreen: bool = False):
             elif event.type == pygame.KEYDOWN and app.state == State.LOGGING:
                 app.key_down_event.set()
 
-            # Labeling (Keydown) events
+            # Labeling events
             elif event.type == pygame.KEYDOWN and app.state == State.LABELING:
                 i = app.form_active_index
                 if event.key == pygame.K_BACKSPACE: # Delete
@@ -528,7 +636,7 @@ async def run_display(app: AppState, fullscreen: bool = False):
                 elif event.unicode and event.unicode.isprintable():
                     app.form_fields[i][1] += event.unicode
 
-            # Post-shot label (choice picker) events
+            # Post-shot label events
             elif event.type == pygame.KEYDOWN and app.state == State.POST_LABELING:
                 if event.key in (pygame.K_UP, pygame.K_LEFT):
                     app.choice_active_index = (app.choice_active_index - 1) % len(app.choice_options)
@@ -558,7 +666,7 @@ async def run_display(app: AppState, fullscreen: bool = False):
             fading = True
             fade_elapsed = 0.0
             if app.state == State.RESULTS:
-                result_entered_at = time.monotonic()
+                result_entered_at = time.monotonic() # Start timeout
             prev_state = app.state
 
         render_scene(internal, app, font, dt)
@@ -575,7 +683,6 @@ async def run_display(app: AppState, fullscreen: bool = False):
         else:
             frame_to_show = internal
 
-
         scaled = pygame.transform.scale(frame_to_show, window.get_size())
         window.blit(scaled, (0, 0))
         pygame.display.flip()
@@ -587,7 +694,10 @@ async def run_display(app: AppState, fullscreen: bool = False):
     pygame.quit()
 
 
-async def _demo(draw_graph = False):
+async def _demo(draw_graph = False) -> None:
+    """
+    A simple demo of the display system, simulating a shot being pulled and labeled.
+    """
     import random
 
     app = AppState()

@@ -20,9 +20,9 @@ except ImportError:
 REC_THRESHOLD = 0.07
 
 defaults = ShotDefaults.load(fallback=ShotDefaults(GRIND_SETTING, DOSE_G, BEAN_NAME, ROAST_DATE, OPEN_DATE))
-model_path = Path("./shot_cnn_{}.pt") # Saved Model
+model_path = Path("./shot_cnn_{}.pt") # Saved model
 
-async def pull_shot(app: AppState):
+async def pull_shot(app: AppState) -> None:
     # Boot and search for scale
     app.state = State.BOOT
     device = await find_scale(known_address=KNOWN_ADDRESS)
@@ -30,10 +30,10 @@ async def pull_shot(app: AppState):
         print("No varia AKU found.")
         return
 
-    # Get pre-shot statistics
+    # Get pre-shot information
     await pre_label_shot(defaults, app)
     app.state = State.GRINDING
-    await app.key_down_event.wait() # Wait to continue
+    await app.key_down_event.wait() # wait to continue
     app.key_down_event.clear()
 
     # Pull shot
@@ -52,10 +52,11 @@ async def pull_shot(app: AppState):
     row, label = await label_shot(defaults, path, app)
     print("Label: " + label)
     append_manifest(row)
-    if not app.result_label:
+    if not app.result_label: # if model did not predict
         app.result_label = label
 
     # Lazy recommendations
+    # TODO: implement a more sophisticated recommendation system to adjust grind setting
     if app.result_probs:
         diff = app.result_probs['over'] - app.result_probs['under']
         if diff > REC_THRESHOLD:
@@ -70,7 +71,7 @@ async def pull_shot(app: AppState):
     # Display results
     app.state = State.RESULTS
 
-    if label != 'discard': # Retrain model
+    if label != 'discard': # retrain model
         update_model(Path("./shots"))
 
 async def main():

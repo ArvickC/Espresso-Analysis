@@ -3,14 +3,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import pandas as pd
+from numpy import ndarray
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from datetime import datetime
 from preprocessing import build_dataset, normalize, LABELS, resample, weight_to_features
 
+# Minimum number of shots per class required to train the model
 MIN_SHOTS_PER_CLASS = 5
 
 class ShotCNN(nn.Module):
+    """
+    A simple 1D CNN for classifying espresso shot curves.
+    """
     def __init__(self, in_channels: int = 2, n_classes: int = 3):
         super().__init__()
         self.features = nn.Sequential(
@@ -36,7 +41,17 @@ class ShotCNN(nn.Module):
         x = self.global_pool(x).squeeze(-1)
         return self.classifier(x)
 
-def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16, lr: float = 1e-3, seed: int = 42):
+def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16,
+          lr: float = 1e-3, seed: int = 42) -> tuple[ShotCNN, float]:
+    """
+    Train the ShotCNN model on the dataset built from the shots directory.
+    :param shots_dir: Path to the directory containing shot data.
+    :param epochs: Number of training epochs.
+    :param batch_size: Batch size for training.
+    :param lr: Learning rate for the optimizer.
+    :param seed: Random seed for reproducibility.
+    :return: A tuple containing the trained ShotCNN model and the best validation accuracy.
+    """
     X, y = build_dataset(shots_dir)
     print(f"Loaded {len(y)} samples")
 
@@ -58,6 +73,7 @@ def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16, lr: float = 1
 
     best_val_acc = 0.0
     for epoch in range(epochs):
+        # Training
         model.train()
         total_loss = 0.0
         for xb, yb in train_loader:
@@ -69,6 +85,7 @@ def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16, lr: float = 1
             total_loss += loss.item() * xb.size(0)
         train_loss = total_loss / len(train_ds)
 
+        # Validation
         model.eval()
         correct = 0
         with torch.no_grad():
@@ -78,6 +95,7 @@ def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16, lr: float = 1
         val_acc = correct / len(val_ds)
         best_val_acc = max(val_acc, best_val_acc)
 
+        # Print progress every 5 epochs
         if epoch % 5 == 0:
             print(f"epoch {epoch}: train_loss={train_loss:.4f}, val_acc={val_acc:.4f}")
 
@@ -97,6 +115,12 @@ def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16, lr: float = 1
 
 
 def update_model(shots_dir: Path = Path("./shots"), epochs: int = 15) -> bool:
+    """
+    Update the model if there are enough labeled shots in the manifest.
+    :param shots_dir: Path to the directory containing shot data.
+    :param epochs: Number of training epochs.
+    :return: True if the model was updated, False otherwise.
+    """
     manifest_path = shots_dir / "manifest.csv"
     if not manifest_path.exists():
         print("No manifest yet; nothing to train on.")
@@ -118,14 +142,24 @@ def update_model(shots_dir: Path = Path("./shots"), epochs: int = 15) -> bool:
     train(shots_dir, epochs=epochs)
     return True
 
-def load_checkpoint(checkpoint_path: Path):
+def load_checkpoint(checkpoint_path: Path) -> tuple[ShotCNN, float, float, list[str]]:
+    """
+    Load a model checkpoint and return the model, mean, std, and labels.
+    """
     ckpt = torch.load(checkpoint_path, weights_only=False)
     model = ShotCNN(in_channels=2, n_classes=len(ckpt["labels"]))
     model.load_state_dict(ckpt["model_state"])
-    model.eval()
+    model.eval() # set model to evaluation mode
     return model, ckpt["mean"], ckpt["std"], ckpt["labels"]
 
-def predict_shot(curve_path: Path = Path("./shots"), model_path: Path = None):
+def predict_shot(curve_path: Path = Path("./shots"),
+                 model_path: Path | None = None) -> tuple[str, ndarray] | None:
+    """
+    Predict the label of a shot given its curve and a trained model.
+    :param curve_path: Path to the CSV file containing the shot curve data.
+    :param model_path: Path to the trained model checkpoint.
+    :return: A tuple containing the predicted label and the probabilities, or None if no model is provided.
+    """
     if not model_path:
         return None
 

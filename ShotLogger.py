@@ -9,6 +9,11 @@ if TYPE_CHECKING:
     from display import AppState
 
 class ShotLogger:
+    """
+    A simple logger for recording espresso shot data from a varia aku scale.
+    It records the elapsed time and weight during a shot, and can save the
+    data to a CSV file. It can also update a GUI application state with live data points if provided.
+    """
     def __init__(self, out_dir: str = './shots', app: "AppState | None" = None):
         self.out_dir = Path(out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
@@ -38,6 +43,12 @@ class ShotLogger:
         # print(f"\r  t={elapsed:6.2f}s  weight={weight:7.2f}g", end="\n", flush=True)
 
     def save(self, prefix: str = '') -> Path:
+        """
+        Save the recorded shot data to a CSV file in the output directory.
+        The filename will include the current date and time, and an optional prefix.
+        :param prefix: Optional prefix for the filename
+        :return: Path to the saved CSV file
+        """
         date = datetime.now().strftime("%Y%m%d_%H%M%S")
         path = self.out_dir / f"{prefix}shot_{date}.csv"
 

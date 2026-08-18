@@ -3,6 +3,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+import warnings
 
 if TYPE_CHECKING:
     from display import AppState
@@ -28,7 +29,10 @@ class ShotDefaults:
         self.roast_date = roast_date
         self.open_date = open_date
 
-    def save(self, path: Path = DEFAULTS_PATH):
+    def save(self, path: Path = DEFAULTS_PATH) -> None:
+        """
+        Save the current defaults to a JSON file.
+        """
         data = {
             "grind_setting": self.grind_setting,
             "dose_g": self.dose_g,
@@ -50,6 +54,15 @@ class ShotDefaults:
         return fallback if fallback is not None else cls()
 
 def _prompt(prompt_text: str, default: str = "") -> str:
+    """
+    Prompt the user for input, returning the default if no input is given.
+    """
+    warnings.warn(
+        "_prompt() is deprecated; use display.request_form() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     suffix = f" [{default}]" if default else ""
     raw = input(f"{prompt_text}{suffix}: ").strip()
     if raw:
@@ -61,6 +74,12 @@ def prompt_label() -> str:
     """
     Prompt the user to label a shot, returning one of the PROMPT_LABELS.
     """
+    warnings.warn(
+        "prompt_label() is deprecated; use display.request_choice() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
     while True:
         raw = input(f"Label this shot {PROMPT_LABELS} (or first letter): ").strip().lower()
         if raw in PROMPT_LABELS:
@@ -71,7 +90,7 @@ def prompt_label() -> str:
         print(f"Didn't recognize '{raw}'. Please try again.")
 
 
-async def pre_label_shot(defaults: ShotDefaults, app: "AppState"):
+async def pre_label_shot(defaults: ShotDefaults, app: "AppState") -> None:
     """
     Informational data collected before the shot is pulled.
     """
@@ -92,7 +111,7 @@ async def pre_label_shot(defaults: ShotDefaults, app: "AppState"):
     defaults.dose_g = result["Dose (g)"]
     app.dose = float(result["Dose (g)"])
     defaults.grind_setting = result["Grind setting"]
-    defaults.save()
+    defaults.save() # save to file
 
 async def label_shot(defaults: ShotDefaults, curve_path: Path, app: "AppState") -> tuple[dict, str]:
     """
@@ -115,6 +134,7 @@ async def label_shot(defaults: ShotDefaults, curve_path: Path, app: "AppState") 
         return row, label
 
     # notes = input("Notes (tasting notes, channeling, etc; optional): ").strip()
+    # TODO: implement a notes input form in the display module
     notes = ""
 
     row.update({
@@ -128,7 +148,7 @@ async def label_shot(defaults: ShotDefaults, curve_path: Path, app: "AppState") 
 
     return row, label
 
-def append_manifest(row: dict, manifest_path: Path = Path("./shots/manifest.csv")):
+def append_manifest(row: dict, manifest_path: Path = Path("./shots/manifest.csv")) -> None:
     """
     Append a row to the manifest CSV file, creating it if it doesn't exist.
     """

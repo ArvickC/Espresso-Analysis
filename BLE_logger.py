@@ -21,18 +21,30 @@ def parse_weight(raw: bytes) -> float | None:
 # Courtesy of Beanconqueror
 # Various commands to control the varia aku mini scale
 def tare_cmd() -> bytes:
+    """
+    Returns the command to tare the scale
+    """
     body = [0x82, 0x01, 0x01]
     return bytes([0xFA, *body, _xor(body)])
 
 def start_timer_cmd() -> bytes:
+    """
+    Returns the command to start the timer on the scale
+    """
     body = [0x88, 0x01, 0x01]
     return bytes([0xFA, *body, _xor(body)])
 
 def stop_timer_cmd() -> bytes:
+    """
+    Returns the command to stop the timer on the scale
+    """
     body = [0x89, 0x01, 0x01]
     return bytes([0xFA, *body, _xor(body)])
 
 def reset_timer_cmd() -> bytes:
+    """
+    Returns the command to reset the timer on the scale
+    """
     body = [0x8A, 0x01, 0x01]
     return bytes([0xFA, *body, _xor(body)])
 
