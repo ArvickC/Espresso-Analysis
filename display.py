@@ -212,14 +212,14 @@ def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float):
     text(surface, font, "ENTER: next field", FOOTER_POS, GRID)
 
     cursor = "_" if int(time.monotonic() * 2) % 2 == 0 else " "  # ~2Hz blink
-    y = 32
+    y = 30
     for i, (label, value) in enumerate(app.form_fields):
         active = i == app.form_active_index
         color = GREEN if active else AMBER
         shown_value = value + cursor if active else value
         text(surface, font, f"{label}:", (29, y), color)
-        text(surface, font, shown_value, (29, y + 12), color)
-        y += 28
+        text(surface, font, shown_value, (29, y + 18), color)
+        y += 36
 
 def draw_grinding(surface: pygame.Surface, app: AppState, font, dt: float):
     # surface.fill(BG_COLOR)

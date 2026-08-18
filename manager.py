@@ -50,18 +50,22 @@ async def pull_shot(app: AppState):
 
     # Label shot for model training
     row, label = await label_shot(defaults, path, app)
+    print("Label: " + label)
     append_manifest(row)
     if not app.result_label:
         app.result_label = label
 
     # Lazy recommendations
-    diff = app.result_probs['over'] - app.result_probs['under']
-    if diff > REC_THRESHOLD:
-        app.rec = "grind coarser"
-    elif diff < -REC_THRESHOLD:
-        app.rec = "grind finer"
+    if app.result_probs:
+        diff = app.result_probs['over'] - app.result_probs['under']
+        if diff > REC_THRESHOLD:
+            app.rec = "grind coarser"
+        elif diff < -REC_THRESHOLD:
+            app.rec = "grind finer"
+        else:
+            app.rec = "extraction is balanced"
     else:
-        app.rec = "extraction is balanced"
+        app.rec = "no recommendation"
 
     # Display results
     app.state = State.RESULTS
