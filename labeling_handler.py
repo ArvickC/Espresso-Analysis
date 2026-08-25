@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
 PROMPT_LABELS = {'under', 'balanced', 'over', 'discard'}
 MANIFEST_COLUMNS = [
-    "shot_id", "timestamp", "curve_file", "label",
+    "shot_id", "timestamp", "curve_file", "label", "shot_time_s",
     "grind_setting", "dose_g", "bean_name", "roast_date", "open_date", "notes",
 ]
 DEFAULTS_PATH = Path("./shot_defaults.json")
@@ -113,6 +113,21 @@ async def pre_label_shot(defaults: ShotDefaults, app: "AppState") -> None:
     defaults.grind_setting = result["Grind setting"]
     defaults.save() # save to file
 
+def _read_shot_duration(curve_path: Path) -> float:
+    """
+    Read the shot duration from the last row of the curve CSV file.
+    :param curve_path: Path to the CSV file containing the shot curve data.
+    :return: The shot duration in seconds, or 0.0 if the file is not found or invalid.
+    """
+    try:
+        with open(curve_path, newline="") as file:
+            rows = list(csv.reader(file))
+        if len(rows) < 2:
+            return 0.0
+        return float(rows[-1][0])  # last row, first column (elapsed time)
+    except (FileNotFoundError, ValueError, IndexError):
+        return 0.0
+
 async def label_shot(defaults: ShotDefaults, curve_path: Path, app: "AppState") -> tuple[dict, str]:
     """
     Labeling intended to be done after the shot is pulled and tasted.
@@ -127,6 +142,7 @@ async def label_shot(defaults: ShotDefaults, curve_path: Path, app: "AppState") 
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "curve_file": curve_path.name,
         "label": label,
+        "shot_time_s": f"{_read_shot_duration(curve_path):.2f}",
     }
 
     if label == "discard":
