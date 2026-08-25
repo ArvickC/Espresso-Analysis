@@ -40,4 +40,4 @@ monitors.
 ## Documentation
 
 For more detailed information on usage, configuration, and customization, see
-the [wiki](https://github.com/arvickc/Espresso-Analysis/wiki).
+the [wiki](https://github.com/arvickc/Espresso-Analysis/wiki) (WIP).
