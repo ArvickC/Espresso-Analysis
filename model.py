@@ -109,7 +109,14 @@ def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16,
         'std': std,
         'labels': LABELS,
     }, f"shot_cnn_{date}.pt")
-    print(f"Saved model to shot_cnn_{date}.pt")
+    torch.save({
+        'model_state': model.state_dict(),
+        'mean': mean,
+        'std': std,
+        'labels': LABELS,
+    }, f"shot_cnn_latest.pt")
+
+    print(f"Saved model to shot_cnn_{date}.pt and shot_cnn_latest.pt")
 
     return model, best_val_acc
 

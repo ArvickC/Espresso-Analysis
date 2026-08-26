@@ -6,6 +6,7 @@ from log_shot import run_shot_session
 from labeling_handler import pre_label_shot, label_shot, ShotDefaults, append_manifest
 from model import update_model, predict_shot, LABELS
 from display import AppState, run_display, State
+from recommend_grind import update_grind_model, load_gp, recommend_next_grind, explain
 
 try:
     from config import KNOWN_ADDRESS, GRIND_SETTING, DOSE_G, BEAN_NAME, ROAST_DATE, OPEN_DATE
@@ -20,7 +21,8 @@ except ImportError:
 REC_THRESHOLD = 0.07
 
 defaults = ShotDefaults.load(fallback=ShotDefaults(GRIND_SETTING, DOSE_G, BEAN_NAME, ROAST_DATE, OPEN_DATE))
-model_path = Path("./shot_cnn_{}.pt") # Saved model
+model_path = Path("./shot_cnn_latest.pt") # Saved model
+gp_path = Path("./gp_latest.pkl") # Saved GP model
 
 async def pull_shot(app: AppState) -> None:
     # Boot and search for scale
@@ -55,24 +57,17 @@ async def pull_shot(app: AppState) -> None:
     if not app.result_label: # if model did not predict
         app.result_label = label
 
-    # Lazy recommendations
-    # TODO: implement a more sophisticated recommendation system to adjust grind setting
-    if app.result_probs:
-        diff = app.result_probs['over'] - app.result_probs['under']
-        if diff > REC_THRESHOLD:
-            app.rec = "grind coarser"
-        elif diff < -REC_THRESHOLD:
-            app.rec = "grind finer"
-        else:
-            app.rec = "extraction is balanced"
-    else:
-        app.rec = "no recommendation"
+    gp = load_gp(path)
+    if gp is not None:
+        result = recommend_next_grind(gp)
+        explain(result, app)
 
     # Display results
     app.state = State.RESULTS
 
-    if label != 'discard': # retrain model
+    if label != 'discard': # retrain models
         update_model(Path("./shots"))
+        update_grind_model(Path("./shots"))
 
 async def main():
     app = AppState()
