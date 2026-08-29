@@ -13,7 +13,7 @@ IDEAL_TIME_MID = (IDEAL_TIME_LOW + IDEAL_TIME_HIGH) / 2
 GRIND_MIN, GRIND_MAX = 2.0, 5.0 # fine -> coarse
 
 MIN_SHOTS_FOR_GP = 4
-GP_MODEL_PATH = Path("./gp_latest.pkl")
+GP_MODEL_PATH = Path("./gp_models/gp_latest.pkl")
 
 def _get_manifest(manifest_path: Path = Path("./shots/manifest.csv")) -> list[dict]:
     """
@@ -40,17 +40,22 @@ def _get_manifest(manifest_path: Path = Path("./shots/manifest.csv")) -> list[di
                     continue  # Skip rows with invalid numeric values
     return manifest
 
-def save_gp(gp: GPR, path: Path = GP_MODEL_PATH):
+def save_gp(gp: GPR, path: Path = GP_MODEL_PATH, file_override = None):
     """
     Save the Gaussian Process model to a file with a timestamped filename and also to a fixed path.
     """
-    date = datetime.now().strftime("%Y%m%d_%H%M%S")
-    timestamped = path.parent / f"gp_{date}.pkl"
-    with open(timestamped, 'wb') as file:
-        pickle.dump(gp, file)
-    with open(path, 'wb') as file:
-        pickle.dump(gp, file)
-    print(f"Saved GP model to {timestamped} and {path}")
+    if file_override is not None:
+        path = path.parent / file_override
+        with open(path, 'wb') as file:
+            pickle.dump(gp, file)
+    else:
+        date = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamped = path.parent / f"gp_{date}.pkl"
+        with open(timestamped, 'wb') as file:
+            pickle.dump(gp, file)
+        with open(path, 'wb') as file:
+            pickle.dump(gp, file)
+    print(f"Saved GP model.")
 
 def load_gp(path: Path = GP_MODEL_PATH) -> GPR | None:
     """
@@ -62,7 +67,10 @@ def load_gp(path: Path = GP_MODEL_PATH) -> GPR | None:
         gp = pickle.load(file)
     return gp
 
-def update_grind_model(shots_dir: Path = Path("./shots")) -> GPR | None:
+def update_grind_model(shots_dir: Path = Path("./shots"),
+                       save_path = GP_MODEL_PATH,
+                       file_override: str | None = None
+) -> GPR | None:
     """
     Update the Gaussian Process model based on the manifest data in the specified shots directory.
     """
@@ -72,7 +80,7 @@ def update_grind_model(shots_dir: Path = Path("./shots")) -> GPR | None:
         return None
 
     gp = fit_gp(manifest)
-    save_gp(gp)
+    save_gp(gp, save_path, file_override=file_override)
     return gp
 
 def fit_gp(manifest: list[dict]) -> GPR:
@@ -135,7 +143,7 @@ def explain(result, app: AppState):
     g = result["grind"]
     t = result["predicted_time"]
     u = result["uncertainty"]
-    app.rec = f"Grind: {g:.2f}, Pred. Time: {t:.2f} ± {u:.1f}s"
+    app.rec = f"Grind: {g:.2f}; {t:.2f} ± {u:.1f}s"
 
 def plot_gp(gp: GPR, manifest: list[dict], result: dict | None = None, save_path: Path | None = None):
     """

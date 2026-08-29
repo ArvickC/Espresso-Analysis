@@ -693,59 +693,131 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
 
     pygame.quit()
 
+async def _demo_fill_pre_shot_form(app: AppState, defaults: "ShotDefaults") -> None:
+    """
+    Fills the pre-shot labeling form with default values for demo purposes.
+    """
+    await asyncio.sleep(0.2)
+    app.form_fields = [
+        ["Bean name", defaults.bean_name],
+        ["Roast date", defaults.roast_date],
+        ["Bag opened date", defaults.open_date],
+        ["Dose (g)", defaults.dose_g],
+        ["Grind setting", defaults.grind_setting],
+    ]
+    app.form_active_index = 0
+    app.form_result = {
+        "Bean name": defaults.bean_name,
+        "Roast date": defaults.roast_date,
+        "Bag opened date": defaults.open_date,
+        "Dose (g)": defaults.dose_g,
+        "Grind setting": defaults.grind_setting,
+    }
+    app.state = State.LABELING
+    app.form_submit_event.set()
 
-async def _demo(draw_graph = False) -> None:
+
+async def _demo(draw_graph = True) -> None:
     """
-    A simple demo of the display system, simulating a shot being pulled and labeled.
+    Demo mode that replays a synthetic shot and runs the grind recommendation flow
+    without requiring a physical scale.
     """
+    # lazy imports
+    import csv
     import random
+    from labeling_handler import ShotDefaults
+    from recommend_grind import update_grind_model, load_gp, recommend_next_grind, explain
 
     app = AppState()
-    app.result_timeout = 3.0  # short for the demo; use minutes in real use
+    app.result_timeout = 10.0  # short for the demo; use minutes in real use
     display_task = asyncio.create_task(run_display(app))
+    app.state = State.IDLE
+
+    defaults = ShotDefaults(
+        grind_setting="3.5",
+        dose_g="18.0",
+        bean_name="Demo Beans",
+        roast_date="",
+        open_date="",
+    )
+
+    synthetic_dir = Path("./synthetic_shots")
+    manifest_path = synthetic_dir / "manifest.csv"
+
+    if not manifest_path.exists():
+        from generate_BLE_data import main as generate_synthetic_data
+        print("No synthetic dataset found; generating one now...")
+        generate_synthetic_data()
+
+    with open(manifest_path, newline="") as f:
+        manifest_rows = [
+            row for row in csv.DictReader(f)
+            if row.get("label") in {"under", "balanced", "over"} and row.get("curve_file")
+        ]
+
+    if not manifest_rows:
+        raise RuntimeError(f"No labeled synthetic shots found in {manifest_path}")
+
+    # Fit from synthetic manifest (manager.py uses update_grind_model on logged shots).
+    gp = load_gp(Path("./gp_models/gp_synthetic.pkl"))
+    if gp is None:
+        print("No GP model found; fitting from synthetic manifest...")
+        gp = update_grind_model(synthetic_dir, Path("./gp_models/gp_synthetic.pkl"), file_override="gp_synthetic.pkl")
+        if gp is None:
+            raise RuntimeError("Failed to fit GP model from synthetic manifest")
+    print("Loaded GP model for synthetic dataset.")
+
+    shot = random.choice(manifest_rows)
+    curve_path = synthetic_dir / shot["curve_file"]
+    defaults.grind_setting = shot["grind_setting"]
 
     print("In idle...")
+    app.state = State.IDLE
     await app.start_event.wait()
     app.start_event.clear()
-    print("Boot animation playing...")
 
-    # await asyncio.sleep(2)
-    # print("Label animation playing...")
-    # app.state = State.LABELING
-    # await asyncio.sleep(2)
-    # print("Grinding animation playing...")
-    # app.state = State.GRINDING
-    # await asyncio.sleep(2)
-    # print("Prepping animation playing...")
-    # app.state = State.PREPPING
-    await asyncio.sleep(2)
-    if draw_graph:
-        print("Logging animation playing...")
-        app.state = State.LOGGING
+    print("Booting...")
+    app.state = State.BOOT
+    await asyncio.sleep(1.0)
 
-    t, w = 0.0, 0.0
-    for _ in range(150):
-        t += 0.1
-        w += random.uniform(-0.2, 0.6)
-        app.add_point(t, w)
-        if draw_graph:
-            await asyncio.sleep(0.03)
+    print("Pre-shot labeling...")
+    await _demo_fill_pre_shot_form(app, defaults)
+    await asyncio.sleep(5.0)
+
+    print("Puck prep...")
+    app.state = State.GRINDING
+    await asyncio.sleep(2.0)
+
+    print(f"Replaying synthetic shot: {curve_path.name} (true label={shot['label']}, true grind={shot['grind_setting']})")
+    app.state = State.LOGGING
+
+    with open(curve_path, newline="") as f:
+        for row in csv.DictReader(f):
+            try:
+                elapsed = float(row["elapsed_s"])
+                weight = float(row["weight_g"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            app.add_point(elapsed, weight)
+            if draw_graph:
+                await asyncio.sleep(0.03)
 
     print("Requesting post-shot label...")
     label = await request_choice(app, "LABEL THIS SHOT", ["under", "balanced", "over", "discard"])
     print("Picked:", label)
 
-    app.result_label = label
-    app.result_probs = {"under": 0.12, "balanced": 0.71, "over": 0.17}
+    # Simulated classifier output for demo mode.
+    app.result_probs = {"under": 0.1, "balanced": 0.1, "over": 0.1}
+    app.result_probs[shot["label"]] = 0.8
+    app.result_label = max(app.result_probs, key=app.result_probs.get)
+    if not app.result_label:
+        app.result_label = label
 
-    REC_THRESHOLD = 0.0
-    diff = app.result_probs['over'] - app.result_probs['under']
-    if diff > REC_THRESHOLD:
-        app.rec = "grind coarser"
-    elif diff < -REC_THRESHOLD:
-        app.rec = "grind finer"
+    if gp is not None:
+        result = recommend_next_grind(gp)
+        explain(result, app)
     else:
-        app.rec = "predicted extraction is balanced"
+        app.rec = "No grind recommendation available yet"
 
     app.state = State.RESULTS
     print(f"Result screen ({app.result_timeout}s before idle)...")

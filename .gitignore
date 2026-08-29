@@ -1,6 +1,7 @@
 __pycache__/
 /shots
 /synthetic_shots
+/gp_models
 
 shot_cnn_synthetic.pt
 shot_defaults.json

@@ -22,7 +22,7 @@ REC_THRESHOLD = 0.07
 
 defaults = ShotDefaults.load(fallback=ShotDefaults(GRIND_SETTING, DOSE_G, BEAN_NAME, ROAST_DATE, OPEN_DATE))
 model_path = Path("./shot_cnn_latest.pt") # Saved model
-gp_path = Path("./gp_latest.pkl") # Saved GP model
+gp_path = Path("./gp_models/gp_latest.pkl") # Saved GP model
 
 async def pull_shot(app: AppState) -> None:
     # Boot and search for scale
@@ -57,7 +57,7 @@ async def pull_shot(app: AppState) -> None:
     if not app.result_label: # if model did not predict
         app.result_label = label
 
-    gp = load_gp(path)
+    gp = load_gp(gp_path)
     if gp is not None:
         result = recommend_next_grind(gp)
         explain(result, app)

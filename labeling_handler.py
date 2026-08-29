@@ -90,7 +90,7 @@ def prompt_label() -> str:
         print(f"Didn't recognize '{raw}'. Please try again.")
 
 
-async def pre_label_shot(defaults: ShotDefaults, app: "AppState") -> None:
+async def pre_label_shot(defaults: ShotDefaults, app: "AppState", save: bool = True) -> None:
     """
     Informational data collected before the shot is pulled.
     """
@@ -98,20 +98,21 @@ async def pre_label_shot(defaults: ShotDefaults, app: "AppState") -> None:
 
     fields = [
         ("Bean name", defaults.bean_name),
-        ("Roast date (YYYY-MM-DD)", defaults.roast_date),
-        ("Bag opened date (YYYY-MM-DD)", defaults.open_date),
+        ("Roast date", defaults.roast_date),
+        ("Bag opened date", defaults.open_date),
         ("Dose (g)", defaults.dose_g),
         ("Grind setting", defaults.grind_setting),
     ]
     result = await request_form(app, fields)
 
     defaults.bean_name = result["Bean name"]
-    defaults.roast_date = result["Roast date (YYYY-MM-DD)"]
-    defaults.open_date = result["Bag opened date (YYYY-MM-DD)"]
+    defaults.roast_date = result["Roast date"]
+    defaults.open_date = result["Bag opened date"]
     defaults.dose_g = result["Dose (g)"]
     app.dose = float(result["Dose (g)"])
     defaults.grind_setting = result["Grind setting"]
-    defaults.save() # save to file
+    if save:
+        defaults.save() # save to file
 
 def _read_shot_duration(curve_path: Path) -> float:
     """
