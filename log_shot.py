@@ -33,9 +33,36 @@ async def wait_for_trigger(_button=None) -> None:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, input)
 
+
+
+async def dose_shot(device: BLEDevice, app: AppState):
+    app.state = State.BOOT
+    async with BleakClient(device) as client: # connect to device
+        print(f"Connected to {device.name}")
+
+        print("Subscribing to weight notifications...")
+        logger = ShotLogger(app=app)
+        await client.start_notify(
+            CHAR_UUID,
+            lambda sender, data: logger.handle_notification(sender, data, plot=False),
+        )
+
+        print("Place cup on scale...")
+        app.state = State.TARING
+        await app.key_down_event.wait()
+        app.key_down_event.clear()
+        await client.write_gatt_char(CMD_UUID, tare_cmd(), response=False)
+
+        print("Dosing...")
+        app.state = State.DOSING
+        await app.key_down_event.wait()
+        app.key_down_event.clear()
+
+        await client.stop_notify(CHAR_UUID)
+
 async def run_shot_session(device: BLEDevice, app: AppState) -> Path:
     app.state = State.BOOT
-    async with BleakClient(device) as client: # Connect to device
+    async with BleakClient(device) as client: # connect to device
         print(f"Connected to {device.name}")
 
         print("Instantiating Logger...")
@@ -48,7 +75,7 @@ async def run_shot_session(device: BLEDevice, app: AppState) -> Path:
         await client.write_gatt_char(CMD_UUID, reset_timer_cmd(), response=False)
 
         # Prep the puck & tare scale
-        app.state = State.PREPPING
+        app.state = State.TARING
         print("Place cup on scale...")
         await app.key_down_event.wait()
         app.key_down_event.clear()

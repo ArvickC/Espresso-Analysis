@@ -21,13 +21,15 @@ class ShotDefaults:
                  dose_g = "16.0",
                  bean_name = "",
                  roast_date = "",
-                 open_date = ""
+                 open_date = "",
+                 previous_grind_rec = "",
         ):
         self.grind_setting = grind_setting
         self.dose_g = dose_g
         self.bean_name = bean_name
         self.roast_date = roast_date
         self.open_date = open_date
+        self.previous_grind_rec = previous_grind_rec
 
     def save(self, path: Path = DEFAULTS_PATH) -> None:
         """
@@ -39,6 +41,7 @@ class ShotDefaults:
             "bean_name": self.bean_name,
             "roast_date": self.roast_date,
             "open_date": self.open_date,
+            "previous_grind_rec": self.previous_grind_rec,
         }
         path.write_text(json.dumps(data, indent=2))
 
@@ -100,17 +103,19 @@ async def pre_label_shot(defaults: ShotDefaults, app: "AppState", save: bool = T
         ("Bean name", defaults.bean_name),
         ("Roast date", defaults.roast_date),
         ("Bag opened date", defaults.open_date),
-        ("Dose (g)", defaults.dose_g),
-        ("Grind setting", defaults.grind_setting),
+        # ("Dose (g)", defaults.dose_g),
+        # ("Grind setting", defaults.grind_setting),
     ]
     result = await request_form(app, fields)
 
-    defaults.bean_name = result["Bean name"]
+    defaults.bean_name = result["Bean name"].replace(" ", "")
     defaults.roast_date = result["Roast date"]
     defaults.open_date = result["Bag opened date"]
-    defaults.dose_g = result["Dose (g)"]
-    app.dose = float(result["Dose (g)"])
-    defaults.grind_setting = result["Grind setting"]
+    # defaults.dose_g = result["Dose (g)"]
+    # app.dose = float(result["Dose (g)"])
+    # defaults.grind_setting = result["Grind setting"]
+
+    app.previous_grind_rec = defaults.previous_grind_rec
     if save:
         defaults.save() # save to file
 

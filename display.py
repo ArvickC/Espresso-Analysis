@@ -38,8 +38,9 @@ class State(Enum):
     IDLE = auto()
     BOOT = auto()
     LABELING = auto()
-    GRINDING = auto()
+    DOSING = auto()
     PREPPING = auto()
+    TARING = auto()
     LOGGING = auto()
     POST_LABELING = auto()
     RESULTS = auto()
@@ -56,7 +57,11 @@ class AppState:
     dose: float | None = None
     result_label: str | None = None
     result_probs: dict[str, float] | None = None
-    rec: str | None = None # e.g. "grind finer"
+    previous_grind_rec: str | None = None
+    grind_rec: str | None = None
+    pred_time: str | None = None
+    rec: str | None = None
+    rec_swap_interval: float = 2.5 # seconds
     quit: bool = False
     result_timeout: float = DEFAULT_RESET_TIMEOUT
     start_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -80,7 +85,10 @@ class AppState:
     idle_anim: "Animation | None" = None
     boot_anim: "Animation | None" = None
     grind_anim: "Animation | None" = None
-    puck_prep_anim: "Animation | None" = None
+    tare_anim: "Animation | None" = None
+
+    # 0 = spray beans, 1 = grind beans, 2 = wdt, 3 = level, 4 = tamp
+    puck_prep_state: int | None = None
 
     def add_point(self, elapsed: float, weight: float) -> None:
         """
@@ -272,14 +280,32 @@ def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float) -> No
         shown_value = value + cursor if active else value
         text(surface, font, f"{label}:", (29, y), color)
         text(surface, font, shown_value, (29, y + 18), color)
-        y += 36
+        y += 48
 
-def draw_grinding(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
-    _draw_animated(surface, app, font, app.grind_anim, dt, "GRINDING...", AMBER)
-    text(surface, font, "GRIND BEANS", HEADER_POS, AMBER)
+def draw_dosing(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
+    bg = load_background(BACKGROUND_DIR, RES)
+    surface.blit(bg, (0, 0))
+    #TODO draw dosing screen
+    text(surface, font, f"{app.dose}g", (-1, -1), AMBER) # placeholder
 
 def draw_prepping(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
-    _draw_animated(surface, app, font, app.puck_prep_anim, dt, "PREPPING...", AMBER)
+    #TODO swap out placeholder graphics
+    if app.puck_prep_state is None or app.puck_prep_state < 0 or app.puck_prep_state > 4:
+        text(surface, font, "ERR", HEADER_POS, AMBER)
+    elif app.puck_prep_state == 0:
+        text(surface, font, "SPRAY BEANS", HEADER_POS, AMBER)
+    elif app.puck_prep_state == 1:
+        text(surface, font, "GRIND BEANS", HEADER_POS, AMBER)
+        text(surface, font, f"Rec: {app.previous_grind_rec}", (-1, -1), GREEN)
+    elif app.puck_prep_state == 2:
+        text(surface, font, "WDT", HEADER_POS, AMBER)
+    elif app.puck_prep_state == 3:
+        text(surface, font, "LEVEL", HEADER_POS, AMBER)
+    elif app.puck_prep_state == 4:
+        text(surface, font, "TAMP", HEADER_POS, AMBER)
+
+def draw_tare_scale(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
+    _draw_animated(surface, app, font, app.tare_anim, dt, "TARE SCALE...", AMBER)
     text(surface, font, "TARE SCALE", HEADER_POS, AMBER)
 
 def draw_logging(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
@@ -491,15 +517,16 @@ def draw_result(surface: pygame.Surface, app: AppState, font, dt: float) -> None
         for lab, p in app.result_probs.items():
             text(surface, font, f"{lab:9s} {p:.2f}", (29, y), GREEN)
             y += 20
-    if app.rec:
+    if app.grind_rec:
         text(surface, font, app.rec, (29, y + 6), AMBER)
 
 DRAW_FUNCS = {
     State.IDLE : draw_idle,
     State.BOOT: draw_boot,
     State.LABELING: draw_labeling,
-    State.GRINDING: draw_grinding,
+    State.DOSING: draw_dosing,
     State.PREPPING: draw_prepping,
+    State.TARING: draw_tare_scale,
     State.LOGGING: draw_logging,
     State.POST_LABELING: draw_post_labeling,
     State.RESULTS: draw_result,
@@ -560,10 +587,10 @@ def load_assets(app: AppState) -> None:
         except FileNotFoundError:
             pass
 
-    if app.puck_prep_anim is None:
+    if app.tare_anim is None:
         try:
             frames = load_frame_sequence(PUCK_PREP_DIR, size=RES)
-            app.puck_prep_anim = Animation(frames, fps=24, loop=True)
+            app.tare_anim = Animation(frames, fps=24, loop=True)
         except FileNotFoundError:
             pass
 
@@ -594,6 +621,7 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
     outgoing_snapshot: pygame.Surface | None = None
     fading = False
     fade_elapsed = 0.0
+    next_rec_swap_at: float | None = None
 
     running = True
     while running and not app.quit:
@@ -610,12 +638,21 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
                 app.boot_frame = 0
                 app.start_event.set()
 
-            # Done grinding beans event
-            elif event.type == pygame.KEYDOWN and app.state == State.GRINDING:
+            # Log dose event
+            elif event.type == pygame.KEYDOWN and app.state == State.DOSING:
                 app.key_down_event.set()
 
-            # Tare scale
+            # Done grinding beans event
             elif event.type == pygame.KEYDOWN and app.state == State.PREPPING:
+                if app.puck_prep_state is None:
+                    app.key_down_event.set()
+                app.puck_prep_state += 1
+                if app.puck_prep_state > 4:
+                    app.puck_prep_state = None
+                    app.key_down_event.set()
+
+            # Tare scale
+            elif event.type == pygame.KEYDOWN and app.state == State.TARING:
                 app.key_down_event.set()
 
             # Start / stop logging
@@ -652,6 +689,17 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
                             app.choice_result = opt
                             app.choice_submit_event.set()
                             break
+
+        # Switch recommendation
+        now = time.monotonic()
+        if app.state == State.RESULTS and app.grind_rec and app.pred_time:
+            if next_rec_swap_at is None:
+                next_rec_swap_at = now + app.rec_swap_interval
+            elif now >= next_rec_swap_at:
+                app.rec = app.pred_time if app.rec == app.grind_rec else app.grind_rec
+                next_rec_swap_at += app.rec_swap_interval
+        else:
+            next_rec_swap_at = None
 
         # Switch back to idle after timeout
         if (app.state == State.RESULTS and result_entered_at is not None
@@ -702,18 +750,19 @@ async def _demo_fill_pre_shot_form(app: AppState, defaults: "ShotDefaults") -> N
         ["Bean name", defaults.bean_name],
         ["Roast date", defaults.roast_date],
         ["Bag opened date", defaults.open_date],
-        ["Dose (g)", defaults.dose_g],
-        ["Grind setting", defaults.grind_setting],
+        # ["Dose (g)", defaults.dose_g],
+        # ["Grind setting", defaults.grind_setting],
     ]
     app.form_active_index = 0
     app.form_result = {
         "Bean name": defaults.bean_name,
         "Roast date": defaults.roast_date,
         "Bag opened date": defaults.open_date,
-        "Dose (g)": defaults.dose_g,
-        "Grind setting": defaults.grind_setting,
+        # "Dose (g)": defaults.dose_g,
+        # "Grind setting": defaults.grind_setting,
     }
     app.state = State.LABELING
+    app.previous_grind_rec = f"3.5"  # placeholder for demo
     app.form_submit_event.set()
 
 
@@ -736,7 +785,7 @@ async def _demo(draw_graph = True) -> None:
     defaults = ShotDefaults(
         grind_setting="3.5",
         dose_g="18.0",
-        bean_name="Demo Beans",
+        bean_name="DemoBeans",
         roast_date="",
         open_date="",
     )
@@ -759,10 +808,14 @@ async def _demo(draw_graph = True) -> None:
         raise RuntimeError(f"No labeled synthetic shots found in {manifest_path}")
 
     # Fit from synthetic manifest (manager.py uses update_grind_model on logged shots).
-    gp = load_gp(Path("./gp_models/gp_synthetic.pkl"))
+    gp_path = Path(f"./gp_models/{defaults.bean_name}_gp_synthetic.pkl")
+    gp = load_gp(gp_path)
     if gp is None:
         print("No GP model found; fitting from synthetic manifest...")
-        gp = update_grind_model(synthetic_dir, Path("./gp_models/gp_synthetic.pkl"), file_override="gp_synthetic.pkl")
+        gp = update_grind_model(synthetic_dir,
+                                gp_path,
+                                file_override=f"{defaults.bean_name}_gp_synthetic.pkl",
+                                bean_name=defaults.bean_name)
         if gp is None:
             raise RuntimeError("Failed to fit GP model from synthetic manifest")
     print("Loaded GP model for synthetic dataset.")
@@ -770,6 +823,7 @@ async def _demo(draw_graph = True) -> None:
     shot = random.choice(manifest_rows)
     curve_path = synthetic_dir / shot["curve_file"]
     defaults.grind_setting = shot["grind_setting"]
+    app.dose = float(defaults.dose_g)
 
     print("In idle...")
     app.state = State.IDLE
@@ -784,9 +838,16 @@ async def _demo(draw_graph = True) -> None:
     await _demo_fill_pre_shot_form(app, defaults)
     await asyncio.sleep(5.0)
 
+    print("Dosing...")
+    app.state = State.DOSING
+    await app.key_down_event.wait()
+    app.key_down_event.clear()
+
     print("Puck prep...")
-    app.state = State.GRINDING
-    await asyncio.sleep(2.0)
+    app.puck_prep_state = 0
+    app.state = State.PREPPING
+    await app.key_down_event.wait()
+    app.key_down_event.clear()
 
     print(f"Replaying synthetic shot: {curve_path.name} (true label={shot['label']}, true grind={shot['grind_setting']})")
     app.state = State.LOGGING
@@ -817,7 +878,8 @@ async def _demo(draw_graph = True) -> None:
         result = recommend_next_grind(gp)
         explain(result, app)
     else:
-        app.rec = "No grind recommendation available yet"
+        app.grind_rec = "No Recommendation"
+        app.pred_time = "N/A"
 
     app.state = State.RESULTS
     print(f"Result screen ({app.result_timeout}s before idle)...")

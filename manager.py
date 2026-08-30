@@ -1,8 +1,8 @@
 import asyncio
 from pathlib import Path
-from bleak import BLEDevice
+from bleak import BLEDevice, BleakClient
 from BLE_logger import find_scale
-from log_shot import run_shot_session
+from log_shot import run_shot_session, dose_shot
 from labeling_handler import pre_label_shot, label_shot, ShotDefaults, append_manifest
 from model import update_model, predict_shot, LABELS
 from display import AppState, run_display, State
@@ -22,7 +22,7 @@ REC_THRESHOLD = 0.07
 
 defaults = ShotDefaults.load(fallback=ShotDefaults(GRIND_SETTING, DOSE_G, BEAN_NAME, ROAST_DATE, OPEN_DATE))
 model_path = Path("./shot_cnn_latest.pt") # Saved model
-gp_path = Path("./gp_models/gp_latest.pkl") # Saved GP model
+gp_path = Path(f"./gp_models/{defaults.bean_name}_gp_latest.pkl") # Saved GP model
 
 async def pull_shot(app: AppState) -> None:
     # Boot and search for scale
@@ -32,9 +32,11 @@ async def pull_shot(app: AppState) -> None:
         print("No varia AKU found.")
         return
 
-    # Get pre-shot information
     await pre_label_shot(defaults, app)
-    app.state = State.GRINDING
+
+    await dose_shot(device, app)
+
+    app.state = State.PREPPING
     await app.key_down_event.wait() # wait to continue
     app.key_down_event.clear()
 
@@ -60,6 +62,9 @@ async def pull_shot(app: AppState) -> None:
     gp = load_gp(gp_path)
     if gp is not None:
         result = recommend_next_grind(gp)
+        g = result["grind"]
+        defaults.previous_grind_rec = f"{g:.2f}"
+        defaults.save()
         explain(result, app)
 
     # Display results

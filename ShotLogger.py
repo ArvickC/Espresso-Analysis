@@ -30,17 +30,19 @@ class ShotLogger:
     def stop_recording(self):
         self.recording = False
 
-    def handle_notification(self, _sender, data: bytearray):
+    def handle_notification(self, _sender, data: bytearray, plot: bool = True):
         weight = varia.parse_weight(data)
-
         if weight is None: return
-        if not self.recording or self.t0 is None: return
 
-        elapsed = time.monotonic() - self.t0
-        self.rows.append((elapsed, weight))
-        if self.app is not None:
-            self.app.add_point(elapsed, weight)
-        # print(f"\r  t={elapsed:6.2f}s  weight={weight:7.2f}g", end="\n", flush=True)
+        if plot:
+            if not self.recording or self.t0 is None: return
+
+            elapsed = time.monotonic() - self.t0
+            self.rows.append((elapsed, weight))
+            if self.app is not None: # pulling shot
+                self.app.add_point(elapsed, weight)
+        else:
+            self.app.dose = float(weight)
 
     def save(self, prefix: str = '') -> Path:
         """
