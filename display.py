@@ -27,12 +27,17 @@ CROSSFADE_DURATION = 0.25 # seconds
 GRAPH_SPLIT_FRACTION = 0.5
 GRAPH_DOCK_MARGIN = 6 # px
 
-BACKGROUND_DIR = 'assets/bg.png'
+BG_DIR = 'assets/bg.png'
 IDLE_DIR = 'assets/idle'
 BOOT_DIR = 'assets/boot'
 BEANS_DIR = 'assets/beans.png'
+DOSE_DIR = 'assets/dose'
 GRIND_DIR = 'assets/grind'
-PUCK_PREP_DIR = 'assets/puck_prep'
+WDT_DIR = 'assets/wdt'
+LEVEL_DIR = 'assets/level'
+TAMP_DIR = 'assets/tamp'
+TARING = 'assets/puck_prep'
+SPRAY_DIR = 'assets/spray.png'
 
 class State(Enum):
     IDLE = auto()
@@ -84,7 +89,11 @@ class AppState:
     bg_image: "pygame.Surface | None" = None
     idle_anim: "Animation | None" = None
     boot_anim: "Animation | None" = None
+    dose_anim: "Animation | None" = None
     grind_anim: "Animation | None" = None
+    wdt_anim: "Animation | None" = None
+    level_anim: "Animation | None" = None
+    tamp_anim: "Animation | None" = None
     tare_anim: "Animation | None" = None
 
     # 0 = spray beans, 1 = grind beans, 2 = wdt, 3 = level, 4 = tamp
@@ -283,26 +292,30 @@ def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float) -> No
         y += 48
 
 def draw_dosing(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
-    bg = load_background(BACKGROUND_DIR, RES)
-    surface.blit(bg, (0, 0))
-    #TODO draw dosing screen
-    text(surface, font, f"{app.dose}g", (-1, -1), AMBER) # placeholder
+    _draw_animated(surface, font, app, app.dose_anim, dt, "DOSE", AMBER)
+    text(surface, font, f"{app.dose}g", (-1, 160), AMBER) # placeholder
 
 def draw_prepping(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     #TODO swap out placeholder graphics
     if app.puck_prep_state is None or app.puck_prep_state < 0 or app.puck_prep_state > 4:
         text(surface, font, "ERR", HEADER_POS, AMBER)
     elif app.puck_prep_state == 0:
-        text(surface, font, "SPRAY BEANS", HEADER_POS, AMBER)
+        # text(surface, font, "SPRAY BEANS", HEADER_POS, AMBER)
+        frame = load_background(SPRAY_DIR, RES)
+        surface.blit(frame, (0, 0))
     elif app.puck_prep_state == 1:
-        text(surface, font, "GRIND BEANS", HEADER_POS, AMBER)
-        text(surface, font, f"Rec: {app.previous_grind_rec}", (-1, -1), GREEN)
+        # text(surface, font, "GRIND BEANS", HEADER_POS, AMBER)
+        _draw_animated(surface, app, font, app.grind_anim, dt, "GRIND BEANS", AMBER)
+        text(surface, font, f"PREVIOUS REC: {app.previous_grind_rec}", (-1, 160), GREEN)
     elif app.puck_prep_state == 2:
-        text(surface, font, "WDT", HEADER_POS, AMBER)
+        # text(surface, font, "WDT", HEADER_POS, AMBER)
+        _draw_animated(surface, app, font, app.wdt_anim, dt, "DISTRIBUTE BEANS", AMBER)
     elif app.puck_prep_state == 3:
-        text(surface, font, "LEVEL", HEADER_POS, AMBER)
+        # text(surface, font, "LEVEL", HEADER_POS, AMBER)
+        _draw_animated(surface, app, font, app.level_anim, dt, "LEVEL PUCK", AMBER)
     elif app.puck_prep_state == 4:
-        text(surface, font, "TAMP", HEADER_POS, AMBER)
+        # text(surface, font, "TAMP", HEADER_POS, AMBER)
+        _draw_animated(surface, app, font, app.tamp_anim, dt, "TAMP PUCK", AMBER)
 
 def draw_tare_scale(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     _draw_animated(surface, app, font, app.tare_anim, dt, "TARE SCALE...", AMBER)
@@ -564,7 +577,7 @@ def load_assets(app: AppState) -> None:
     Loads all necessary assets into the application state.
     """
     if app.bg_image is None:
-        app.bg_image = load_background(BACKGROUND_DIR, RES)
+        app.bg_image = load_background(BG_DIR, RES)
 
     if app.idle_anim is None:
         try:
@@ -580,6 +593,13 @@ def load_assets(app: AppState) -> None:
         except FileNotFoundError:
             pass
 
+    if app.dose_anim is None:
+        try:
+            frames = load_frame_sequence(DOSE_DIR, size=RES)
+            app.dose_anim = Animation(frames, fps=30, loop=True)
+        except FileNotFoundError:
+            pass
+
     if app.grind_anim is None:
         try:
             frames = load_frame_sequence(GRIND_DIR, size=RES)
@@ -587,9 +607,30 @@ def load_assets(app: AppState) -> None:
         except FileNotFoundError:
             pass
 
+    if app.wdt_anim is None:
+        try:
+            frames = load_frame_sequence(WDT_DIR, size=RES)
+            app.wdt_anim = Animation(frames, fps=30, loop=True)
+        except FileNotFoundError:
+            pass
+
+    if app.level_anim is None:
+        try:
+            frames = load_frame_sequence(LEVEL_DIR, size=RES)
+            app.level_anim = Animation(frames, fps=30, loop=True)
+        except FileNotFoundError:
+            pass
+
+    if app.tamp_anim is None:
+        try:
+            frames = load_frame_sequence(TAMP_DIR, size=RES)
+            app.tamp_anim = Animation(frames, fps=50, loop=True)
+        except FileNotFoundError:
+            pass
+
     if app.tare_anim is None:
         try:
-            frames = load_frame_sequence(PUCK_PREP_DIR, size=RES)
+            frames = load_frame_sequence(TARING, size=RES)
             app.tare_anim = Animation(frames, fps=24, loop=True)
         except FileNotFoundError:
             pass
@@ -836,7 +877,7 @@ async def _demo(draw_graph = True) -> None:
 
     print("Pre-shot labeling...")
     await _demo_fill_pre_shot_form(app, defaults)
-    await asyncio.sleep(5.0)
+    await asyncio.sleep(3.0)
 
     print("Dosing...")
     app.state = State.DOSING
