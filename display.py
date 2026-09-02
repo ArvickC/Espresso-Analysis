@@ -323,10 +323,11 @@ def draw_tare_scale(surface: pygame.Surface, app: AppState, font, dt: float) -> 
 
 def draw_logging(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     text(surface, font, "PULLING SHOT", HEADER_POS, AMBER)
-    draw_live_graph(surface, app.dose, app.live_points, rect=(26, 27, RES[0] - 53, RES[1] - 53), font=font)
+    draw_live_graph(surface, app.dose, app.live_points, rect=(26, 27, RES[0] - 53, RES[1] - 53), font=font,
+                    fixed_scale=True, tick_labels=False)
 
 def draw_live_graph(surface, dose, points, rect, font, gradient = True,
-                    emphasize_zero = True, tick_labels = True) -> None:
+                    fixed_scale=False, tick_labels = True, grid = True) -> None:
     """
     Draws weight (green, left scale) and flow-rate (cyan, right scale) on
     the same plot area. Each series is auto-scaled independently.
@@ -336,7 +337,7 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
     :param rect: A tuple (x, y, width, height) defining the drawing area.
     :param font: The pygame font to use for text.
     :param gradient: Whether to use a gradient for the lines.
-    :param emphasize_zero: Whether to emphasize the zero line.
+    :param fixed_scale: Whether to use a fixed scale for the axes.
     :param tick_labels: Whether to draw tick labels.
     """
     x0, y0, w, h = rect
@@ -347,11 +348,19 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
     weights = [p[1] for p in points]
     flows = [p[2] for p in points]
 
-    max_t = max(ts) or 1.0
-    max_w = max(weights) or 1.0
-    min_f, max_f = min(flows + [0.0]), max(flows + [0.1])
-    cur_f, cur_w = flows[-1], weights[-1]
-    span_f = (max_f - min_f) or 1.0
+    if not fixed_scale:
+        max_t = max(ts) or 1.0
+        max_w = max(weights) or 1.0
+        min_f, max_f = min(flows + [0.0]), max(flows + [0.1])
+        cur_f, cur_w = flows[-1], weights[-1]
+        span_f = (max_f - min_f) or 1.0
+    else:
+        max_t = max(max(ts), 30.0)
+        max_w = max(max(weights), 40.0)
+        min_f = min(flows + [0.0])
+        max_f = max(max(flows + [1.0]), 2.0)
+        cur_f, cur_w = flows[-1], weights[-1]
+        span_f = (max_f - min_f) or 1.0
 
     def to_x(t) -> int:
         """
@@ -443,6 +452,15 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
             color = _lerp_color(base_color, full_color, t)
             pygame.draw.line(surface, color, (x1, y1), (x2, y2), width)
 
+    def _frange(start, stop, step):
+        """
+        Generates a range of floating-point numbers.
+        """
+        v = start
+        while v <= stop + 1e-9:
+            yield v
+            v += step
+
     # Colors
     ZERO_W = _dim(GREEN, 0.4)
     ZERO_F = _dim(CYAN, 0.4)
@@ -460,23 +478,34 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
 
     TARGET_F = TARGET_W / 27.5 # assume ~27.5s shot time
     TOL_W, TOL_F = 6.0, 0.6 # arbitrary tolerances for color gradient
+    TIME_GRID_STEP = 5.0 # seconds
+    WEIGHT_GRID_STEP = 5.0 # grams
+    FLOW_GRID_STEP = 0.5 # g/s
 
-    # Draw graph scales
-    for wt in _tick_marks(0, max_w):
-        y = y_of_w(wt)
-        color = ZERO_W if (abs(wt) < 1e-9 and emphasize_zero) else GRID_W
-        width = 2 if (abs(wt) < 1e-9 and emphasize_zero) else 1
-        pygame.draw.line(surface, color, (x0, y), (x0 + w, y), 1)
-        if tick_labels:
-            text(surface, font, f"{wt:g}", (5, y - 10), LABEL_W)
+    # Highlight target lines
+    pygame.draw.line(surface, ZERO_W, (x0, y_of_w(TARGET_W)), (x0 + w, y_of_w(TARGET_W)), 1)
+    pygame.draw.line(surface, ZERO_F, (x0, y_of_f(TARGET_F)), (x0 + w, y_of_f(TARGET_F)), 1)
+    pygame.draw.line(surface, GRID, (to_x(27.5), y0), (to_x(27.5), y0 + h), 1)
 
-    for f in _tick_marks(min_f, max_f):
-        y = y_of_f(f)
-        color = ZERO_F if (abs(f) < 1e-9 and emphasize_zero) else GRID_F
-        width = 2 if (abs(f) < 1e-9 and emphasize_zero) else 1
-        pygame.draw.line(surface, color, (x0, y), (x0 + w, y), 1)
-        if tick_labels:
-            text(surface, font, f"{f:g}", (x0 + w + 10, y - 10), LABEL_F)
+    if grid:
+        # horizontal weight grid
+        # for wt in _frange(0.0, max_w, WEIGHT_GRID_STEP):
+        #     y = y_of_w(wt)
+        #     pygame.draw.line(surface, GRID_W, (x0, y), (x0 + w, y), 1)
+        #     if tick_labels:
+        #         text(surface, font, f"{wt:g}", (5, y - 10), LABEL_W)
+        #
+        # # horizontal flow grid
+        # for f in _frange(min_f, max_f, FLOW_GRID_STEP):
+        #     y = y_of_f(f)
+        #     pygame.draw.line(surface, GRID_F, (x0, y), (x0 + w, y), 1)
+        #     if tick_labels:
+        #         text(surface, font, f"{f:g}", (x0 + w + 10, y - 10), LABEL_F)
+
+        # vertical time grid
+        for t in _frange(0.0, max_t, TIME_GRID_STEP):
+            x = to_x(t)
+            pygame.draw.line(surface, _dim(GRID, 0.5), (x, y0), (x, y0 + h), 1)
 
     weights_smoothed = _moving_average(weights, window=5)
     flows_smoothed = _moving_average(flows, window=5)
@@ -568,7 +597,7 @@ def render_scene(surface: pygame.Surface, app: AppState, font, dt: float) -> Non
         graph_rect = (26, split_y + GRAPH_DOCK_MARGIN,
                       RES[0] - 53, RES[1] - split_y - GRAPH_DOCK_MARGIN - 27)
         draw_live_graph(surface, app.dose, app.live_points, rect=graph_rect, font=font,
-                        emphasize_zero=False, tick_labels=False)
+                        fixed_scale=True, tick_labels=False, grid = False)
     else:
         DRAW_FUNCS[app.state](surface, app, font, dt)
 
@@ -932,4 +961,4 @@ async def _demo(draw_graph = True) -> None:
     await display_task
 
 if __name__ == "__main__":
-    asyncio.run(_demo(draw_graph = False))
+    asyncio.run(_demo(draw_graph = True))
