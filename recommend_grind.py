@@ -138,16 +138,18 @@ def recommend_next_grind(gp: GPR, grind_min=GRIND_MIN, grind_max=GRIND_MAX,
         "acquisition": acquisition,
     }
 
-def explain(result, app: AppState):
+def explain(result, app: AppState, manifest_path: Path = Path("./shots/manifest.csv")):
     """
     Update the app state with a human-readable recommendation based on the GP model's output.
     """
     g = result["grind"]
     t = result["predicted_time"]
     u = result["uncertainty"]
-    app.grind_rec = f"Grind at: {g:.2f}"
-    app.rec = app.grind_rec
-    app.pred_time = f"{t:.2f} ± {u:.1f}s"
+    app.grind_rec = g
+    app.pred_time = t
+    app.pred_time_uncertainty = u
+    app.manifest_path = manifest_path
+    app.gp_result = result
 
 def plot_gp(gp: GPR, manifest: list[dict], result: dict | None = None, save_path: Path | None = None):
     """

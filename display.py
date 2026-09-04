@@ -16,7 +16,8 @@ FPS = 30
 # Colors
 GREEN = (60, 255, 120)
 AMBER = (255, 176, 0)
-CYAN = (80, 220, 255)
+CYAN = (100, 188, 219)
+RED = (230, 48, 48)
 BG_COLOR = (8, 8, 10)
 GRID = (30, 30, 30)
 
@@ -48,10 +49,12 @@ class State(Enum):
     TARING = auto()
     LOGGING = auto()
     POST_LABELING = auto()
-    RESULTS = auto()
+    PREDICTED_LABEL = auto()
+    PREDICTED_GRIND = auto()
+    SUMMARY = auto()
 
 # States where the graph is docked to the bottom of the screen
-GRAPH_DOCKED_STATES = {State.POST_LABELING, State.RESULTS}
+GRAPH_DOCKED_STATES = {State.POST_LABELING}
 
 @dataclass
 class AppState:
@@ -63,10 +66,12 @@ class AppState:
     result_label: str | None = None
     result_probs: dict[str, float] | None = None
     previous_grind_rec: str | None = None
-    grind_rec: str | None = None
-    pred_time: str | None = None
-    rec: str | None = None
-    rec_swap_interval: float = 2.5 # seconds
+    manifest_path: Path | None = None
+    gp_result: dict | None = None
+    bean_name: str | None = None
+    grind_rec: float | None = None
+    pred_time: float | None = None
+    pred_time_uncertainty: float | None = None
     quit: bool = False
     result_timeout: float = DEFAULT_RESET_TIMEOUT
     start_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -98,6 +103,7 @@ class AppState:
 
     # 0 = spray beans, 1 = grind beans, 2 = wdt, 3 = level, 4 = tamp
     puck_prep_state: int | None = None
+    state_entered_at: float | None = None
 
     def add_point(self, elapsed: float, weight: float) -> None:
         """
@@ -141,8 +147,9 @@ class Animation:
         idx = idx % len(self.frames) if self.loop else min(idx, len(self.frames) - 1)
         return self.frames[idx]
 
-def text(surface, font, s, pos, color) -> None:
+def text(surface, font, s, pos, color, alpha: int = 255) -> None:
     rendered = font.render(s, False, color)
+    rendered.set_alpha(alpha)
     if pos[0] < 0 and pos[1] < 0: # center along x-axis and y-axis
         rect = rendered.get_rect(midtop=(surface.get_width() // 2, surface.get_height() // 2))
         surface.blit(rendered, rect)
@@ -154,6 +161,30 @@ def text(surface, font, s, pos, color) -> None:
         surface.blit(rendered, rect)
     else:
         surface.blit(rendered, pos)
+
+
+def draw_text_outside_circle(surface, font, s, center, radius, color, alpha: int = 255,
+                            angle_deg: float = 0.0) -> None:
+    """
+    Draws text outside a circle at a given angle.
+    """
+    rendered = font.render(s, False, color)
+    rendered.set_alpha(alpha)
+    w, h = rendered.get_size()
+    angle = math.radians(angle_deg)
+    edge_x = center[0] + radius * math.cos(angle)
+    edge_y = center[1] + radius * math.sin(angle)
+
+    if math.cos(angle) < 0:
+        # left side: keep the text fully outside and make the text's right edge touch the circle
+        x = int(edge_x - w)
+        y = int(edge_y - h) if math.sin(angle) > 0 else int(edge_y)
+    else:
+        # right side: keep the text fully outside and make the text's left edge touch the circle
+        x = int(edge_x)
+        y = int(edge_y - h) if math.sin(angle) > 0 else int(edge_y)
+
+    surface.blit(rendered, (x, y))
 
 def _natural_key(path: Path):
     return [int(t) if t.isdigit() else t for t in re.split(r'(\d+)', path.stem)]
@@ -292,11 +323,10 @@ def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float) -> No
         y += 48
 
 def draw_dosing(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
-    _draw_animated(surface, font, app, app.dose_anim, dt, "DOSE", AMBER)
+    _draw_animated(surface, app, font, app.dose_anim, dt, "DOSE", AMBER)
     text(surface, font, f"{app.dose}g", (-1, 160), AMBER) # placeholder
 
 def draw_prepping(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
-    #TODO swap out placeholder graphics
     if app.puck_prep_state is None or app.puck_prep_state < 0 or app.puck_prep_state > 4:
         text(surface, font, "ERR", HEADER_POS, AMBER)
     elif app.puck_prep_state == 0:
@@ -488,20 +518,6 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
     pygame.draw.line(surface, GRID, (to_x(27.5), y0), (to_x(27.5), y0 + h), 1)
 
     if grid:
-        # horizontal weight grid
-        # for wt in _frange(0.0, max_w, WEIGHT_GRID_STEP):
-        #     y = y_of_w(wt)
-        #     pygame.draw.line(surface, GRID_W, (x0, y), (x0 + w, y), 1)
-        #     if tick_labels:
-        #         text(surface, font, f"{wt:g}", (5, y - 10), LABEL_W)
-        #
-        # # horizontal flow grid
-        # for f in _frange(min_f, max_f, FLOW_GRID_STEP):
-        #     y = y_of_f(f)
-        #     pygame.draw.line(surface, GRID_F, (x0, y), (x0 + w, y), 1)
-        #     if tick_labels:
-        #         text(surface, font, f"{f:g}", (x0 + w + 10, y - 10), LABEL_F)
-
         # vertical time grid
         for t in _frange(0.0, max_t, TIME_GRID_STEP):
             x = to_x(t)
@@ -529,8 +545,9 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
     f_color = _lerp_color(GRAPH_F, CYAN, _proximity(cur_f, TARGET_F, TOL_F))
 
     # Display important values
+    avg_f = sum(flows[-5:]) / min(len(flows), 5) if flows else 0.0
     text(surface, font, f"{cur_w:.2f}g", (x0 + 20, FOOTER_POS[1]), w_color)
-    text(surface, font, f"{cur_f:.1f}g/s", (x0 + w - 39 - 50, FOOTER_POS[1]), f_color)
+    text(surface, font, f"{avg_f:.1f}g/s", (x0 + w - 39 - 50, FOOTER_POS[1]), f_color)
 
 
 def draw_post_labeling(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
@@ -548,19 +565,340 @@ def draw_post_labeling(surface: pygame.Surface, app: AppState, font, dt: float) 
         y += 20
 
 
-def draw_result(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
-    """
-    Draws the results screen, displaying the result label and probabilities.
-    """
-    label = app.result_label or "?"
-    text(surface, font, f"RESULT: {label.upper()}", HEADER_POS, AMBER)
+def draw_predicted_label(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
+    if not app.result_label or not app.result_probs:
+        app.state = State.PREDICTED_GRIND
+        return
+
+    def _draw_circle_outline(surface, color, center, radius, progress, width=1):
+        """
+        Draws a circular outline (arc) on the given surface.
+        :param surface: The surface to draw on.
+        :param color: The color of the arc.
+        :param center: The center of the circle (x, y).
+        :param radius: The radius of the circle.
+        :param progress: The progress of the arc (0.0 to 1.0).
+        :param width: The width of the arc.
+        """
+        start_angle = 0.0
+        end_angle = progress * 360.0
+        pygame.draw.arc(surface, color, (center[0] - radius, center[1] - radius, radius * 2, radius * 2),
+                        math.radians(start_angle), math.radians(end_angle), width)
+
+    def _draw_line_segments(surface, color, center, radius, progress, results, width=1):
+        """
+        Draws line segments from the center to the circumference of a circle,
+        representing the results as proportions of the total.
+        :param surface: The surface to draw on.
+        :param color: The color of the line segments.
+        :param center: The center of the circle (x, y).
+        :param radius: The radius of the circle.
+        :param progress: The progress of the drawing (0.0 to 1.0).
+        :param results: A dictionary of result labels and their corresponding values.
+        :param width: The width of the line segments.
+        :return: The angles of the predicted segment.
+        """
+        total = sum(results.values())
+        predicted = (0, 0)
+        start_angle = 0.0
+        for lab, p in results.items():
+            end_angle = start_angle + p * 360.0 / total
+            end_x = center[0] + radius * math.cos(math.radians(start_angle)) * progress
+            end_y = center[1] + radius * math.sin(math.radians(start_angle)) * progress
+            pygame.draw.line(surface, color, center, (end_x, end_y), width)
+            if p > 0.33:
+                predicted = (start_angle, end_angle)
+            start_angle = end_angle
+        return predicted
+
+    def _draw_wedge(surface, color, center, radius, progress,
+                    angles, segments=40, width=0):
+        """
+        Draws a wedge (a filled sector) of a circle.
+        :param surface: The surface to draw on.
+        :param color: The color of the wedge.
+        :param center: The center of the circle (x, y).
+        :param radius: The radius of the circle.
+        :param progress: The progress of the drawing (0.0 to 1.0).
+        :param angles: A tuple of (start_angle, end_angle) in degrees.
+        :param segments: The number of segments to approximate the wedge.
+        :param width: The width of the wedge border (0 for filled).
+        """
+        start_angle, end_angle = angles[0], angles[1]
+        points = [(center[0], center[1])]
+        alpha = round(255 * progress)
+        wedge_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        for i in range(segments + 1):
+            t = i / segments
+            angle = start_angle + (end_angle - start_angle) * t
+            x = center[0] + radius * math.cos(math.radians(angle))
+            y = center[1] + radius * math.sin(math.radians(angle))
+            points.append((round(x), round(y)))
+        pygame.draw.polygon(wedge_surface, (*color, alpha), points, width)
+        surface.blit(wedge_surface, (0, 0))
+
+    def _draw_labels(surface, font, center, radius, progress, results):
+        """
+        Draws labels outside the circle for each result segment.
+        :param surface: The surface to draw on.
+        :param font: The font to use for the labels.
+        :param center: The center of the circle (x, y).
+        :param radius: The radius of the circle.
+        :param progress: The progress of the drawing (0.0 to 1.0).
+        :param results: A dictionary of result labels and their corresponding values.
+        """
+        total = sum(results.values())
+        start_angle = 0.0
+        alpha = round(255 * progress)
+        text_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        for lab, p in results.items():
+            label = lab.upper()
+            if label == 'BALANCED':
+                label = 'BAL'
+            end_angle = start_angle + p * 360.0 / total
+            mid_angle = (start_angle + end_angle) / 2
+            draw_text_outside_circle(text_surface, font, f"{label}", center,
+                                    radius * 1.25, AMBER, alpha, angle_deg=mid_angle)
+            start_angle = end_angle
+        surface.blit(text_surface, (0, 0))
+
+    RADIUS = 60
+    TIME_TO_DRAW = 1.0 # seconds
+    elapsed = time.monotonic() - (app.state_entered_at or 0)
+    color = GREEN
+
+    if elapsed - 2 * TIME_TO_DRAW > 0: # dim non-predicted segments
+        elapsed_shifted = elapsed - 2 * TIME_TO_DRAW
+        clamp = 1 - min(1.0, elapsed_shifted / TIME_TO_DRAW)
+        factor = min(clamp + 0.25, 1.0)
+        color = _dim(GREEN, factor)
+
+    progress = min(1.0, elapsed / TIME_TO_DRAW)
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    _draw_circle_outline(surface, color, (RES[0] // 2, RES[1] // 2), RADIUS, progress)
+
+    elapsed = elapsed - TIME_TO_DRAW
+    progress = min(1.0, elapsed / TIME_TO_DRAW) if elapsed >= 0 else 0.0
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    angles = _draw_line_segments(surface, color, (RES[0] // 2, RES[1] // 2), RADIUS, progress, app.result_probs or {})
+
+    elapsed = elapsed - TIME_TO_DRAW
+    progress = min(1.0, elapsed / TIME_TO_DRAW) if elapsed >= 0 else 0.0
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    _draw_wedge(surface, GREEN, (RES[0] // 2, RES[1] // 2), RADIUS, progress, angles)
+
+    elapsed = elapsed - TIME_TO_DRAW
+    progress = min(1.0, elapsed / TIME_TO_DRAW) if elapsed >= 0 else 0.0
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    _draw_labels(surface, font, (RES[0] // 2, RES[1] // 2), RADIUS, progress, app.result_probs or {})
+
+def draw_predicted_grind(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
+    if app.grind_rec is None or app.pred_time is None or app.manifest_path is None or app.gp_result is None:
+        app.state = State.SUMMARY
+        return
+
+    x0, y0, w, h = 26, 27, RES[0] - 53, RES[1] - 53
+    from recommend_grind import _get_manifest
+
+    manifest = _get_manifest(app.manifest_path, bean_name=app.bean_name)
+    if not manifest:
+        app.state = State.IDLE
+        return
+
+    sorted_manifest = sorted(manifest, key=lambda x: x['grind_setting'])
+    TIME_TO_DRAW = 0.8  # seconds
+    IDEAL_TIME_LOW = 25.0
+    IDEAL_TIME_HIGH = 30.0
+    IDEAL_TIME_MID = (IDEAL_TIME_LOW + IDEAL_TIME_HIGH) / 2
+
+    def _time_to_y(time_s, min_time, max_time, y0=y0, h=h):
+        if max_time == min_time:
+            return y0 + h / 2
+        return y0 + h - (time_s - min_time) / (max_time - min_time) * h
+
+    def _grind_to_x(grind, min_grind, max_grind, x0=x0, w=w):
+        if max_grind == min_grind:
+            return x0 + w / 2
+        return x0 + (grind - min_grind) / (max_grind - min_grind) * w
+
+    def _draw_manifest_points(surface, manifest, progress, size, x0, y0, w, h):
+        if not manifest:
+            return
+
+        min_grind_setting = min(entry['grind_setting'] for entry in manifest)
+        max_grind_setting = max(entry['grind_setting'] for entry in manifest)
+        min_shot_time = min(entry['shot_time_s'] for entry in manifest)
+        max_shot_time = max(entry['shot_time_s'] for entry in manifest)
+        grind_span = max_grind_setting - min_grind_setting
+        shot_span = max_shot_time - min_shot_time
+
+        fade_window = 0.16
+        denom = max(1, len(manifest) - 1)
+        point_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+
+        for i, entry in enumerate(manifest):
+            reveal_start = i / denom
+            local = (progress - reveal_start) / fade_window
+            if local <= 0.0:
+                continue
+            local = min(1.0, local)
+            local = local * local * (3.0 - 2.0 * local)  # smoothstep
+            alpha = int(255 * local)
+
+            shot_time = entry['shot_time_s']
+            grind_setting = entry['grind_setting']
+            color = GREEN
+            if entry['label'] == 'under':
+                color = AMBER
+            elif entry['label'] == 'over':
+                color = RED
+
+            x_norm = 0.5 if grind_span == 0 else (grind_setting - min_grind_setting) / grind_span
+            y_norm = 0.5 if shot_span == 0 else (shot_time - min_shot_time) / shot_span
+            x = x0 + x_norm * w
+            y = y0 + h - y_norm * h
+            pygame.draw.circle(point_surface, (*color, alpha), (int(x), int(y)), size)
+
+        surface.blit(point_surface, (0, 0))
+        return max_shot_time, min_shot_time, max_grind_setting, min_grind_setting
+
+    def _draw_ideal_time_band(surface, max_shot_time, min_shot_time, progress, x0, y0, w, h):
+        band_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        alpha = int(255 * progress / 2)
+        band_color = (*_dim(CYAN, 0.5), alpha)
+
+        lower_band_y = _time_to_y(IDEAL_TIME_LOW, min_shot_time, max_shot_time, y0, h)
+        upper_band_y = _time_to_y(IDEAL_TIME_HIGH, min_shot_time, max_shot_time, y0, h)
+        middle_band_y = _time_to_y(IDEAL_TIME_MID, min_shot_time, max_shot_time, y0, h)
+
+        pygame.draw.line(band_surface, band_color, (x0, lower_band_y), (x0 + w, lower_band_y), 1)
+        pygame.draw.line(band_surface, band_color, (x0, upper_band_y), (x0 + w, upper_band_y), 1)
+        pygame.draw.line(band_surface, band_color, (x0, middle_band_y), (x0 + w, middle_band_y), 2)
+
+        surface.blit(band_surface, (0, 0))
+
+    def _draw_gp_line(surface, gp_result, progress, x0, y0, w, h,
+                      min_shot_time, max_shot_time, z_score=1.96):
+        candidates = gp_result.get('all_candidates')
+        means = gp_result.get('all_means')
+        stds = gp_result.get('all_stds')
+        if candidates is None or means is None or stds is None:
+            return
+
+        candidates = [float(v) for v in candidates]
+        means = [float(v) for v in means]
+        stds = [float(v) for v in stds] if stds is not None else None
+        if len(candidates) < 2 or len(candidates) != len(means):
+            return
+        if stds is not None and len(stds) != len(means):
+            return
+
+        min_grind = min(candidates)
+        max_grind = max(candidates)
+        if max_grind == min_grind:
+            return
+
+        clip_x = x0 + w * progress
+        line_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        line_color = (*CYAN, 255)
+        ci_color = (*CYAN, int(255 * 0.2))
+
+        def _clipped_points(values):
+            pts = []
+            for grind, shot_time in zip(candidates, values):
+                x = x0 + (grind - min_grind) / (max_grind - min_grind) * w
+                y = _time_to_y(shot_time, min_shot_time, max_shot_time, y0, h)
+
+                if x < x0:
+                    x = x0
+                elif x > x0 + w:
+                    x = x0 + w
+                if y < y0:
+                    y = y0
+                elif y > y0 + h:
+                    y = y0 + h
+
+                if x > clip_x:
+                    if pts:
+                        prev_x, prev_y = pts[-1]
+                        if x != prev_x:
+                            t = (clip_x - prev_x) / (x - prev_x)
+                            interp_y = prev_y + (y - prev_y) * t
+                            pts.append((clip_x, interp_y))
+                    break
+                pts.append((x, y))
+            return pts
+
+        if stds is not None:
+            upper_vals = [m + z_score * s for m, s in zip(means, stds)]
+            lower_vals = [m - z_score * s for m, s in zip(means, stds)]
+            upper_pts = _clipped_points(upper_vals)
+            lower_pts = _clipped_points(lower_vals)
+            if len(upper_pts) >= 2 and len(lower_pts) >= 2:
+                band_points = upper_pts + list(reversed(lower_pts))
+                pygame.draw.polygon(line_surface, ci_color, band_points)
+
+        points = _clipped_points(means)
+        if len(points) >= 2:
+            pygame.draw.lines(line_surface, line_color, False, points, 2)
+            surface.blit(line_surface, (0, 0))
+
+    def _draw_recommendation(surface, app, font,
+                             max_grind, min_grind, progress):
+        if app.grind_rec is None or app.pred_time is None or app.pred_time_uncertainty is None:
+            return
+        alpha = int(255 * progress)
+        line_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        line_x = _grind_to_x(app.grind_rec, min_grind, max_grind, x0, w)
+        pygame.draw.line(line_surface, (*GREEN, alpha), (line_x, y0), (line_x, y0 + h), 2)
+        text(surface, font, f"{app.grind_rec:.2f}", (line_x - 20, FOOTER_POS[1]), GREEN, alpha)
+        text(surface, font, f"{app.pred_time:.2f} ± {app.pred_time_uncertainty:.1f}", HEADER_POS, CYAN, alpha)
+        surface.blit(line_surface, (0, 0))
+
+
+    elapsed = time.monotonic() - (app.state_entered_at or 0)
+    progress = min(1.0, elapsed / TIME_TO_DRAW)
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    max_shot_time, min_shot_time, max_grind, min_grind = _draw_manifest_points(surface, sorted_manifest, progress,
+                                                                               size=2, x0=x0, y0=y0, w=w, h=h)
+    _draw_ideal_time_band(surface, max_shot_time, min_shot_time, progress, x0, y0, w, h)
+
+    elapsed = elapsed - TIME_TO_DRAW
+    progress = min(1.0, elapsed / TIME_TO_DRAW) if elapsed >= 0 else 0.0
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    _draw_gp_line(surface, app.gp_result, progress, z_score=1.28,
+                  x0=x0, y0=y0, w=w, h=h, min_shot_time=min_shot_time, max_shot_time=max_shot_time)
+
+    elapsed = elapsed - TIME_TO_DRAW
+    progress = min(1.0, elapsed / TIME_TO_DRAW) if elapsed >= 0 else 0.0
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    _draw_recommendation(surface, app, font, max_grind, min_grind, progress)
+
+def draw_summary(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
+    bg = load_background(BEANS_DIR, RES)
+    surface.blit(bg, (0, 0))
+    text(surface, font, "SUMMARY", HEADER_POS, AMBER)
     y = 30
-    if app.result_probs:
-        for lab, p in app.result_probs.items():
-            text(surface, font, f"{lab:9s} {p:.2f}", (29, y), GREEN)
-            y += 20
-    if app.grind_rec:
-        text(surface, font, app.rec, (29, y + 6), AMBER)
+
+    if app.result_label is not None:
+        text(surface, font, f"SHOT: {app.result_label} ({(app.result_probs[app.result_label] * 100):.0f}%)",
+             (29, y), GREEN)
+    else:
+        text(surface, font, f"SHOT: no model",
+             (29, y), GREEN)
+    y += 30
+
+    if app.grind_rec is not None:
+        text(surface, font, f"NEXT GRIND: {app.grind_rec:.2f}", (29, y), CYAN)
+    else:
+        text(surface, font, f"NEXT GRIND: no model", (29, y), CYAN)
+
+    y += 30
+
+    if app.pred_time is not None and app.pred_time_uncertainty is not None:
+        text(surface, font, f"TIME: {app.pred_time:.1f} ± {app.pred_time_uncertainty:.1f}", (29, y), CYAN)
+    else:
+        text(surface, font, f"TIME: no model", (29, y), CYAN)
 
 DRAW_FUNCS = {
     State.IDLE : draw_idle,
@@ -571,7 +909,9 @@ DRAW_FUNCS = {
     State.TARING: draw_tare_scale,
     State.LOGGING: draw_logging,
     State.POST_LABELING: draw_post_labeling,
-    State.RESULTS: draw_result,
+    State.PREDICTED_LABEL: draw_predicted_label,
+    State.PREDICTED_GRIND: draw_predicted_grind,
+    State.SUMMARY: draw_summary,
 }
 
 def load_background(path: str, size: tuple[int, int]) -> pygame.Surface | None:
@@ -684,7 +1024,7 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
 
     app.live_points = [(0, 0, 0)]
 
-    result_entered_at: float | None = None
+    app.state_entered_at = None
     prev_state = app.state
     dt = 1.0 / FPS  # first-frame estimate
 
@@ -712,7 +1052,7 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
             elif event.type == pygame.KEYDOWN and app.state == State.DOSING:
                 app.key_down_event.set()
 
-            # Done grinding beans event
+            # Prepping beans
             elif event.type == pygame.KEYDOWN and app.state == State.PREPPING:
                 if app.puck_prep_state is None:
                     app.key_down_event.set()
@@ -760,22 +1100,22 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
                             app.choice_submit_event.set()
                             break
 
-        # Switch recommendation
-        now = time.monotonic()
-        if app.state == State.RESULTS and app.grind_rec and app.pred_time:
-            if next_rec_swap_at is None:
-                next_rec_swap_at = now + app.rec_swap_interval
-            elif now >= next_rec_swap_at:
-                app.rec = app.pred_time if app.rec == app.grind_rec else app.grind_rec
-                next_rec_swap_at += app.rec_swap_interval
-        else:
-            next_rec_swap_at = None
+            # Switch to predicted grind recommendation
+            elif event.type == pygame.KEYDOWN and app.state == State.PREDICTED_LABEL:
+                app.state = State.PREDICTED_GRIND
 
-        # Switch back to idle after timeout
-        if (app.state == State.RESULTS and result_entered_at is not None
-                and time.monotonic() - result_entered_at > app.result_timeout):
+            # Switch to summary
+            elif event.type == pygame.KEYDOWN and app.state == State.PREDICTED_GRIND:
+                app.state = State.SUMMARY
+
+            # Force switch to idle
+            elif event.type == pygame.KEYDOWN and app.state == State.SUMMARY:
+                app.state = State.IDLE
+
+        if (app.state == State.SUMMARY and app.state_entered_at is not None
+                and time.monotonic() - app.state_entered_at > app.result_timeout):
             app.state = State.IDLE
-            result_entered_at = None
+            app.state_entered_at = None
             prev_state = State.IDLE
 
         # State is changing!
@@ -783,8 +1123,8 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
             outgoing_snapshot = internal.copy()
             fading = True
             fade_elapsed = 0.0
-            if app.state == State.RESULTS:
-                result_entered_at = time.monotonic() # Start timeout
+            if app.state == State.PREDICTED_LABEL or app.state == State.PREDICTED_GRIND or app.state == State.SUMMARY:
+                app.state_entered_at = time.monotonic() # Start timeout
             prev_state = app.state
 
         render_scene(internal, app, font, dt)
@@ -833,6 +1173,7 @@ async def _demo_fill_pre_shot_form(app: AppState, defaults: "ShotDefaults") -> N
     }
     app.state = State.LABELING
     app.previous_grind_rec = f"3.5"  # placeholder for demo
+    app.bean_name = defaults.bean_name
     app.form_submit_event.set()
 
 
@@ -848,7 +1189,7 @@ async def _demo(draw_graph = True) -> None:
     from recommend_grind import update_grind_model, load_gp, recommend_next_grind, explain
 
     app = AppState()
-    app.result_timeout = 10.0  # short for the demo; use minutes in real use
+    app.result_timeout = 30.0  # short for the demo; use minutes in real use
     display_task = asyncio.create_task(run_display(app))
     app.state = State.IDLE
 
@@ -946,13 +1287,13 @@ async def _demo(draw_graph = True) -> None:
 
     if gp is not None:
         result = recommend_next_grind(gp)
-        explain(result, app)
+        explain(result, app, manifest_path=manifest_path)
     else:
-        app.grind_rec = "No Recommendation"
-        app.pred_time = "N/A"
+        app.grind_rec = -1
+        app.pred_time = -1
 
-    app.state = State.RESULTS
-    print(f"Result screen ({app.result_timeout}s before idle)...")
+    app.state = State.PREDICTED_LABEL
+    print(f"({app.result_timeout}s before idle)...")
 
     await asyncio.sleep(app.result_timeout + 1.0)
     print("Back to idle:", app.state)
@@ -961,4 +1302,4 @@ async def _demo(draw_graph = True) -> None:
     await display_task
 
 if __name__ == "__main__":
-    asyncio.run(_demo(draw_graph = True))
+    asyncio.run(_demo(draw_graph = False))

@@ -36,6 +36,7 @@ async def pull_shot(app: AppState) -> None:
 
     await dose_shot(device, app)
 
+    app.puck_prep_state = 0
     app.state = State.PREPPING
     await app.key_down_event.wait() # wait to continue
     app.key_down_event.clear()
@@ -57,7 +58,10 @@ async def pull_shot(app: AppState) -> None:
     print("Label: " + label)
     append_manifest(row)
     if not app.result_label: # if model did not predict
-        app.result_label = label
+        app.result_label = None
+
+    print(defaults.bean_name)
+    print(gp_path)
 
     gp = load_gp(gp_path)
     if gp is not None:
@@ -66,9 +70,12 @@ async def pull_shot(app: AppState) -> None:
         defaults.previous_grind_rec = f"{g:.2f}"
         defaults.save()
         explain(result, app)
+    else:
+        app.grind_rec = None
+        app.pred_time = None
 
     # Display results
-    app.state = State.RESULTS
+    app.state = State.PREDICTED_LABEL
 
     if label != 'discard': # retrain models
         update_model(Path("./shots"))
@@ -76,7 +83,7 @@ async def pull_shot(app: AppState) -> None:
 
 async def main():
     app = AppState()
-    app.result_timeout = 120 # seconds
+    app.result_timeout = 90 # seconds
 
     asyncio.create_task(run_display(app, fullscreen=False))
     while True:

@@ -116,6 +116,7 @@ async def pre_label_shot(defaults: ShotDefaults, app: "AppState", save: bool = T
     # defaults.grind_setting = result["Grind setting"]
 
     app.previous_grind_rec = defaults.previous_grind_rec
+    app.bean_name = defaults.bean_name
     if save:
         defaults.save() # save to file
 
