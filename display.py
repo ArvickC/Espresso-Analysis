@@ -1137,7 +1137,7 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
 
     pygame.quit()
 
-async def _demo_fill_pre_shot_form(app: AppState, defaults: ShotDefaults) -> None:
+async def _demo_fill_pre_shot_form(app: AppState, defaults: "ShotDefaults") -> None:
     """
     Fills the pre-shot labeling form with default values for demo purposes.
     """
