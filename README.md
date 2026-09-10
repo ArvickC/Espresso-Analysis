@@ -86,7 +86,7 @@ pip install -r requirements.txt
 
 Confirm that your device can connect to the scale:
 ```bash
-python debug_connection.py
+python test_scale_connection.py
 ```
 
 ## Usage
@@ -158,12 +158,12 @@ Espresso-Analysis/
 
 **Shot Classifier - `model.py`**
 - 1D CNN over the (time-aligned) weight/flow-rate curve of a shot
-- 3 convolutional blocks (16 -> 32 -> 64 channels) with batch normalization 
+- 3 convolutional blocks (16 → 32 → 64 channels) with batch normalization 
   ReLU activate, global average pooling, and a linear classifier head
 - Trained with an 80/20 train/val split, Adam optimizer, and cross-entropy loss
 - Retrained automatically whenever a new non-discarded shot is added
 
 **Grind Recommender - `recommend_grind.py`**
-- Learns a function from grind setting -> extraction outcome
+- Learns a function from grind setting → extraction outcome
 - Recommends the next grind setting to try, with model state saved per-bean 
   in `gp_models/`

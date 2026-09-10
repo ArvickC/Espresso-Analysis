@@ -1,4 +1,7 @@
 from bleak import BleakScanner, BLEDevice
+import logging
+
+logger = logging.getLogger(__name__)
 
 DEVICE_NAME_HINTS = ("varia aku", "aku mini", "varia")
 
@@ -57,26 +60,26 @@ async def find_scale(timeout: float = 10.0, retries: int = 3,
     :param known_address: Optionally use a known address
     """
     if known_address:
-        print(f"Looking for known device at {known_address}...")
+        logger.debug(f"Looking for known device at {known_address}...")
         device = await BleakScanner.find_device_by_address(known_address, timeout=timeout)
         if device is not None:
-            print(f"Found scale! [{device.address}]")
+            logger.info(f"Found scale! [{device.address}]")
             return device
-        print(f"Known address not found. Falling back to scan...")
+        logger.debug(f"Known address not found. Falling back to scan...")
 
     for i in range(1, retries + 1):
-        print(f"Scanning for scale... ({i}/{retries})")
+        logger.debug(f"Scanning for scale... ({i}/{retries})")
 
         devices = await BleakScanner.discover(timeout=timeout, scanning_mode='active')
         for d in devices:
             name = (d.name or "").lower()
             if any(hint in name for hint in DEVICE_NAME_HINTS):
-                print(f"Found {name} [{d.address}]")
+                logger.info(f"Found {name} [{d.address}]")
                 return d
 
         if i < retries:
-            print(f"No device found. Retrying...")
+            logger.debug(f"No device found. Retrying...")
         else:
-            print("No device found. Aborting.")
+            logger.error("No device found. Aborting.")
 
     return None

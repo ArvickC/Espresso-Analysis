@@ -41,7 +41,6 @@ def weight_to_features(weight: npt.NDArray) -> npt.NDArray:
     :param weight: 1D array of weight values
     :return: 2D array of shape (2, TARGET_LENGTH) with smoothed weight and flow rate
     """
-    # flow = np.gradient(weight, 1.0 / TARGET_HZ)
     window = min(SAVGOL_WINDOW, len(weight) if len(weight) % 2 else len(weight) - 1)
     smoothed = savgol_filter(weight, window_length=window, polyorder=SAVGOL_POLYORDER)
     flow = savgol_filter(weight, window_length=window, polyorder=SAVGOL_POLYORDER,

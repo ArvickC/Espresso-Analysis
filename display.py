@@ -6,6 +6,14 @@ from pathlib import Path
 import pygame
 import re
 import math
+from typing import TYPE_CHECKING
+import logging
+from logging_setup import configure_logging
+
+logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from labeling_handler import ShotDefaults
 
 RES = (320, 240)
 HEADER_POS = (-1, 1)
@@ -28,6 +36,7 @@ CROSSFADE_DURATION = 0.25 # seconds
 GRAPH_SPLIT_FRACTION = 0.5
 GRAPH_DOCK_MARGIN = 6 # px
 
+# -- Asset Directories --
 BG_DIR = 'assets/bg.png'
 IDLE_DIR = 'assets/idle'
 BOOT_DIR = 'assets/boot'
@@ -37,7 +46,7 @@ GRIND_DIR = 'assets/grind'
 WDT_DIR = 'assets/wdt'
 LEVEL_DIR = 'assets/level'
 TAMP_DIR = 'assets/tamp'
-TARING = 'assets/puck_prep'
+TARING_DIR = 'assets/puck_prep'
 SPRAY_DIR = 'assets/spray.png'
 
 class State(Enum):
@@ -148,6 +157,9 @@ class Animation:
         return self.frames[idx]
 
 def text(surface, font, s, pos, color, alpha: int = 255) -> None:
+    """
+    Renders text on the given surface at the specified position with the given color and alpha transparency.
+    """
     rendered = font.render(s, False, color)
     rendered.set_alpha(alpha)
     if pos[0] < 0 and pos[1] < 0: # center along x-axis and y-axis
@@ -192,32 +204,6 @@ def _natural_key(path: Path):
 def _dim(color, factor=0.35):
     return tuple(int(c * factor) for c in color)
 
-def _tick_marks(low, hi, target=4) -> list[float]:
-    """
-    Generates a list of "nice" tick marks between low and hi,
-    aiming for approximately target ticks.
-    :param low: The lower bound of the range.
-    :param hi: The upper bound of the range.
-    :param target: The approximate number of ticks to generate.
-    :return: A list of tick mark values.
-    """
-    span = hi - low
-    if span <= 0:
-        return [low]
-    raw_step = span / target
-    mag = 10 ** math.floor(math.log10(raw_step))
-    for m in (1, 2, 3, 5, 10):
-        step = m * mag
-        if step >= raw_step:
-            break
-    start = math.floor(low / step) * step
-    ticks, v = [], start
-    while v <= hi + step * 1e-6:
-        if v >= low - step * 1e-6:
-            ticks.append(round(v, 6))
-        v += step
-    return ticks
-
 async def request_form(app: AppState, fields: list[tuple[str, str]]) -> dict[str, str] | None:
     """
     Requests a form to be filled out by the user.
@@ -235,13 +221,13 @@ async def request_form(app: AppState, fields: list[tuple[str, str]]) -> dict[str
     await app.form_submit_event.wait()
     return app.form_result
 
-async def request_choice(app: AppState, prompt: str, choices: list[str]) -> str:
+async def request_choice(app: AppState, prompt: str, choices: list[str]) -> str | None:
     """
     Requests the user to make a choice from a list of options.
     :param app: The application state.
     :param prompt: The prompt to display to the user.
     :param choices: A list of choice options.
-    :return: The choice selected by the user.
+    :return: The choice selected by the user, or None if the choice was canceled.
     """
     app.choice_prompt = prompt
     app.choice_options = list(choices)
@@ -875,7 +861,7 @@ def draw_predicted_grind(surface: pygame.Surface, app: AppState, font, dt: float
     _draw_recommendation(surface, app, font, max_grind, min_grind, progress)
 
 def draw_summary(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
-    bg = load_background(BEANS_DIR, RES)
+    bg = load_background(BG_DIR, RES)
     surface.blit(bg, (0, 0))
     text(surface, font, "SUMMARY", HEADER_POS, AMBER)
     y = 30
@@ -999,7 +985,7 @@ def load_assets(app: AppState) -> None:
 
     if app.tare_anim is None:
         try:
-            frames = load_frame_sequence(TARING, size=RES)
+            frames = load_frame_sequence(TARING_DIR, size=RES)
             app.tare_anim = Animation(frames, fps=24, loop=True)
         except FileNotFoundError:
             pass
@@ -1151,7 +1137,7 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
 
     pygame.quit()
 
-async def _demo_fill_pre_shot_form(app: AppState, defaults: "ShotDefaults") -> None:
+async def _demo_fill_pre_shot_form(app: AppState, defaults: ShotDefaults) -> None:
     """
     Fills the pre-shot labeling form with default values for demo purposes.
     """
@@ -1186,7 +1172,7 @@ async def _demo(draw_graph = True) -> None:
     import csv
     import random
     from labeling_handler import ShotDefaults
-    from recommend_grind import update_grind_model, load_gp, recommend_next_grind, explain
+    from recommend_grind import update_grind_model, load_gp, recommend_next_grind, update_appstate_rec
 
     app = AppState()
     app.result_timeout = 30.0  # short for the demo; use minutes in real use
@@ -1287,7 +1273,7 @@ async def _demo(draw_graph = True) -> None:
 
     if gp is not None:
         result = recommend_next_grind(gp)
-        explain(result, app, manifest_path=manifest_path)
+        update_appstate_rec(result, app, manifest_path=manifest_path)
     else:
         app.grind_rec = -1
         app.pred_time = -1
@@ -1302,4 +1288,5 @@ async def _demo(draw_graph = True) -> None:
     await display_task
 
 if __name__ == "__main__":
+    configure_logging()
     asyncio.run(_demo(draw_graph = False))

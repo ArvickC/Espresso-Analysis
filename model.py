@@ -7,7 +7,10 @@ from numpy import ndarray
 from sklearn.model_selection import train_test_split
 from torch.utils.data import TensorDataset, DataLoader
 from datetime import datetime
-from preprocessing import build_dataset, normalize, LABELS, resample, weight_to_features
+from model_preprocessing import build_dataset, normalize, LABELS, resample, weight_to_features
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Minimum number of shots per class required to train the model
 MIN_SHOTS_PER_CLASS = 5
@@ -53,7 +56,7 @@ def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16,
     :return: A tuple containing the trained ShotCNN model and the best validation accuracy.
     """
     X, y = build_dataset(shots_dir)
-    print(f"Loaded {len(y)} samples")
+    logger.info(f"Loaded {len(y)} samples")
 
     X_train, X_val, y_train, y_val = train_test_split(
         X, y, test_size=0.2, random_state=seed, stratify=y
@@ -97,9 +100,9 @@ def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16,
 
         # Print progress every 5 epochs
         if epoch % 5 == 0:
-            print(f"epoch {epoch}: train_loss={train_loss:.4f}, val_acc={val_acc:.4f}")
+            logger.debug(f"epoch {epoch}: train_loss={train_loss:.4f}, val_acc={val_acc:.4f}")
 
-    print(f"\nBest val acc: {best_val_acc:.4f}")
+    logger.info(f"\nBest val acc: {best_val_acc:.4f}")
 
     date = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -116,7 +119,7 @@ def train(shots_dir: Path, epochs: int = 30, batch_size: int = 16,
         'labels': LABELS,
     }, f"shot_cnn_latest.pt")
 
-    print(f"Saved model to shot_cnn_{date}.pt and shot_cnn_latest.pt")
+    logger.info(f"Saved model to shot_cnn_{date}.pt and shot_cnn_latest.pt")
 
     return model, best_val_acc
 
@@ -130,7 +133,7 @@ def update_model(shots_dir: Path = Path("./shots"), epochs: int = 15) -> bool:
     """
     manifest_path = shots_dir / "manifest.csv"
     if not manifest_path.exists():
-        print("No manifest yet; nothing to train on.")
+        logger.info("No manifest yet; nothing to train on.")
         return False
 
     df = pd.read_csv(manifest_path)
@@ -139,17 +142,14 @@ def update_model(shots_dir: Path = Path("./shots"), epochs: int = 15) -> bool:
 
     missing = [lab for lab in LABELS if counts.get(lab, 0) < MIN_SHOTS_PER_CLASS]
     if missing:
-        print(
-            f"Not enough data yet to retrain (need >= {MIN_SHOTS_PER_CLASS}/class); "
-            f"still short on: {missing}. Current counts: {counts.to_dict()}"
-        )
+        logger.info(f"Not enough data yet to retrain (need >= {MIN_SHOTS_PER_CLASS}/class)")
         return False
 
-    print(f"Retraining on {len(df)} shots ({counts.to_dict()})...")
+    logger.info(f"Retraining on {len(df)} shots ({counts.to_dict()})...")
     train(shots_dir, epochs=epochs)
     return True
 
-def load_checkpoint(checkpoint_path: Path) -> tuple[ShotCNN, float, float, list[str]]:
+def load_checkpoint(checkpoint_path: Path) -> tuple[ShotCNN, list[float], list[float], list[str]]:
     """
     Load a model checkpoint and return the model, mean, std, and labels.
     """

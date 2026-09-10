@@ -4,6 +4,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 import warnings
+import logging
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from display import AppState
@@ -119,6 +122,7 @@ async def pre_label_shot(defaults: ShotDefaults, app: "AppState", save: bool = T
     app.bean_name = defaults.bean_name
     if save:
         defaults.save() # save to file
+        logger.info(f"Saved shot defaults for bean '{defaults.bean_name}'")
 
 def _read_shot_duration(curve_path: Path) -> float:
     """
@@ -143,6 +147,9 @@ async def label_shot(defaults: ShotDefaults, curve_path: Path, app: "AppState") 
 
     app.state = State.POST_LABELING
     label = await request_choice(app, "LABEL THIS SHOT", list(PROMPT_LABELS))
+    if label is None:
+        logger.warning("No label selected; defaulting to 'discard'")
+        label = "discard"
 
     row = {
         "shot_id": curve_path.stem,
@@ -184,4 +191,4 @@ def append_manifest(row: dict, manifest_path: Path = Path("./shots/manifest.csv"
             writer.writeheader()
         writer.writerow(row)
 
-    print(f"Logged to {manifest_path} (label={row['label']})")
+    logger.info(f"Logged to {manifest_path} (label={row['label']})")

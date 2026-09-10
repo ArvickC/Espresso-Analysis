@@ -6,6 +6,10 @@ import csv
 import pickle
 from datetime import datetime
 from display import AppState
+from logging_setup import configure_logging
+import logging
+
+logger = logging.getLogger(__name__)
 
 IDEAL_TIME_LOW = 25.0
 IDEAL_TIME_HIGH = 30.0
@@ -24,12 +28,13 @@ def _get_manifest(manifest_path: Path = Path("./shots/manifest.csv"), bean_name 
     """
     manifest = []
     if not manifest_path.exists():
+        logger.info(f"No manifest file found at {manifest_path}.")
         return manifest
 
     with open(manifest_path, newline="") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            if row["label"] in ["under", "balanced", "over"] and row['bean_name'] == bean_name:
+            if row["label"] in ["under", "balanced", "over"] and row['bean_name'] == bean_name: # pull relevant rows
                 try:
                     manifest.append({
                         "grind_setting": float(row["grind_setting"]),
@@ -49,6 +54,7 @@ def save_gp(gp: GPR, path: Path = GP_MODEL_PATH, file_override = None, bean_name
         path = path.parent / file_override
         with open(path, 'wb') as file:
             pickle.dump(gp, file)
+        logger.info(f"Saved GP model to {path}.")
     else:
         date = datetime.now().strftime("%Y%m%d_%H%M%S")
         timestamped = path.parent / f"{bean_name}_gp_{date}.pkl"
@@ -56,13 +62,14 @@ def save_gp(gp: GPR, path: Path = GP_MODEL_PATH, file_override = None, bean_name
             pickle.dump(gp, file)
         with open(path, 'wb') as file:
             pickle.dump(gp, file)
-    print(f"Saved GP model.")
+        logger.info(f"Saved GP model to {path} and {timestamped}.")
 
 def load_gp(path: Path = GP_MODEL_PATH) -> GPR | None:
     """
     Load the Gaussian Process model from a file.
     """
     if not path.exists():
+        logger.info(f"No GP model found at {path}.")
         return None
     with open(path, 'rb') as file:
         gp = pickle.load(file)
@@ -71,14 +78,13 @@ def load_gp(path: Path = GP_MODEL_PATH) -> GPR | None:
 def update_grind_model(shots_dir: Path = Path("./shots"),
                        save_path = GP_MODEL_PATH,
                        file_override: str | None = None,
-                       bean_name = "SBUXESP"
-) -> GPR | None:
+                       bean_name = "SBUXESP") -> GPR | None:
     """
     Update the Gaussian Process model based on the manifest data in the specified shots directory.
     """
     manifest = _get_manifest(shots_dir / 'manifest.csv', bean_name=bean_name)
     if len(manifest) < MIN_SHOTS_FOR_GP:
-        print(f"Not enough data...")
+        logger.info(f"Not enough labeled data... ({MIN_SHOTS_FOR_GP}).")
         return None
 
     gp = fit_gp(manifest)
@@ -101,7 +107,7 @@ def fit_gp(manifest: list[dict]) -> GPR:
     return gp
 
 def recommend_next_grind(gp: GPR, grind_min=GRIND_MIN, grind_max=GRIND_MAX,
-                         n_candidates=200, kappa=1.5, exploration_dampening=0.25):
+                         n_candidates=200, kappa=0.4) -> dict:
     """
     Recommend the next grind setting based on the fitted Gaussian Process model.
     :param gp: Gaussian Process Regressor fitted to the grind setting and shot time data.
@@ -109,7 +115,6 @@ def recommend_next_grind(gp: GPR, grind_min=GRIND_MIN, grind_max=GRIND_MAX,
     :param grind_max: Maximum grind setting to consider for recommendation.
     :param n_candidates: Number of candidate grind settings to evaluate between grind_min and grind_max.
     :param kappa: Exploration-exploitation trade-off parameter; higher values favor exploration.
-    :param exploration_dampening: Dampening factor for the exploration bonus. Reduces the influence of uncertainty.
     :return: Recommendation dictionary containing the best grind setting, predicted shot time and uncertainty.
     """
     candidates = np.linspace(grind_min, grind_max, n_candidates).reshape(-1, 1)
@@ -122,9 +127,7 @@ def recommend_next_grind(gp: GPR, grind_min=GRIND_MIN, grind_max=GRIND_MAX,
     )
 
     closeness_score = -dist_to_band
-
-    explore_bonus = exploration_dampening * kappa * std
-
+    explore_bonus = kappa * std
     acquisition = closeness_score + explore_bonus
     best_index = np.argmax(acquisition)
 
@@ -138,7 +141,7 @@ def recommend_next_grind(gp: GPR, grind_min=GRIND_MIN, grind_max=GRIND_MAX,
         "acquisition": acquisition,
     }
 
-def explain(result, app: AppState, manifest_path: Path = Path("./shots/manifest.csv")):
+def update_appstate_rec(result, app: AppState, manifest_path: Path = Path("./shots/manifest.csv")):
     """
     Update the app state with a human-readable recommendation based on the GP model's output.
     """
@@ -203,10 +206,10 @@ def plot_gp(gp: GPR, manifest: list[dict], result: dict | None = None, save_path
     plt.close(fig)
 
 if __name__ == "__main__":
-    # quick manual check to fit on ./synthetic_shots/manifest.csv
+    configure_logging()
     manifest = _get_manifest(Path("./synthetic_shots/manifest.csv"), bean_name = "DemoBeans")
     if len(manifest) < MIN_SHOTS_FOR_GP:
-        print(f"Need >= {MIN_SHOTS_FOR_GP} labeled shots, have {len(manifest)}.")
+        logger.info(f"Need >= {MIN_SHOTS_FOR_GP} labeled shots, and only have {len(manifest)}.")
     else:
         gp = fit_gp(manifest)
         result = recommend_next_grind(gp)

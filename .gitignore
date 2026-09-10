@@ -7,7 +7,7 @@ shot_cnn_synthetic.pt
 shot_defaults.json
 
 config.py
-debug_scanner.py
+test_BLE_scanner.py
 
 generate_BLE_data.py
 test_synthetic_data.py

@@ -1,12 +1,16 @@
 import asyncio
 from pathlib import Path
 from bleak import BLEDevice, BleakClient
-from BLE_logger import find_scale
+from scale_control import find_scale
 from log_shot import run_shot_session, dose_shot
 from labeling_handler import pre_label_shot, label_shot, ShotDefaults, append_manifest
 from model import update_model, predict_shot, LABELS
 from display import AppState, run_display, State
-from recommend_grind import update_grind_model, load_gp, recommend_next_grind, explain
+from recommend_grind import update_grind_model, load_gp, recommend_next_grind, update_appstate_rec
+from logging_setup import configure_logging
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     from config import KNOWN_ADDRESS, GRIND_SETTING, DOSE_G, BEAN_NAME, ROAST_DATE, OPEN_DATE
@@ -29,7 +33,7 @@ async def pull_shot(app: AppState) -> None:
     app.state = State.BOOT
     device = await find_scale(known_address=KNOWN_ADDRESS)
     if device is None:
-        print("No varia AKU found.")
+        logger.error("Device not found.")
         return
 
     await pre_label_shot(defaults, app)
@@ -49,19 +53,17 @@ async def pull_shot(app: AppState) -> None:
         lab, probs = predict_shot(path, model_path)
         app.result_label = lab
         app.result_probs = dict(zip(LABELS, (float(p) for p in probs)))
-        print(f"Prediction: {lab}")
+        logger.info(f"Prediction: {lab}")
         for lab, p in zip(LABELS, probs):
-            print(f"  {lab:9s} {p:.3f}")
+            logger.debug(f"  {lab:9s} {p:.3f}")
 
     # Label shot for model training
     row, label = await label_shot(defaults, path, app)
-    print("Label: " + label)
+    logger.debug("User label: " + label)
     append_manifest(row)
+
     if not app.result_label: # if model did not predict
         app.result_label = None
-
-    print(defaults.bean_name)
-    print(gp_path)
 
     gp = load_gp(gp_path)
     if gp is not None:
@@ -69,7 +71,7 @@ async def pull_shot(app: AppState) -> None:
         g = result["grind"]
         defaults.previous_grind_rec = f"{g:.2f}"
         defaults.save()
-        explain(result, app)
+        update_appstate_rec(result, app)
     else:
         app.grind_rec = None
         app.pred_time = None
@@ -82,6 +84,7 @@ async def pull_shot(app: AppState) -> None:
         update_grind_model(Path("./shots"))
 
 async def main():
+    configure_logging(False)
     app = AppState()
     app.result_timeout = 90 # seconds
 
