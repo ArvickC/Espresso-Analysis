@@ -40,6 +40,10 @@ async def pull_shot(app: AppState) -> None:
 
     await dose_shot(device, app)
 
+    defaults.dose_g = app.dose # update dose from scale
+    if app.previous_grind_rec and app.previous_grind_rec.strip() != "":
+        defaults.grind_setting = float(app.previous_grind_rec)
+
     app.puck_prep_state = 0
     app.state = State.PREPPING
     await app.key_down_event.wait() # wait to continue

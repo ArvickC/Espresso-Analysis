@@ -59,6 +59,22 @@ class ShotDefaults:
             return cls(**data)
         return fallback if fallback is not None else cls()
 
+
+def _normalize_grind_setting(value: object) -> str | None:
+    """
+    Return a trimmed grind setting only when it is a valid numeric value.
+    """
+    raw = "" if value is None else str(value).strip()
+    if raw == "":
+        return None
+
+    try:
+        float(raw)
+    except ValueError:
+        return None
+
+    return raw
+
 def _prompt(prompt_text: str, default: str = "") -> str:
     """
     Prompt the user for input, returning the default if no input is given.
@@ -102,23 +118,47 @@ async def pre_label_shot(defaults: ShotDefaults, app: "AppState", save: bool = T
     """
     from display import request_form  # lazy import
 
+    app.previous_grind_rec = "" if defaults.previous_grind_rec is None else str(defaults.previous_grind_rec).strip()
+    needs_grind_setting = app.previous_grind_rec == ""
+
     fields = [
         ("Bean name", defaults.bean_name),
         ("Roast date", defaults.roast_date),
         ("Bag opened date", defaults.open_date),
         # ("Dose (g)", defaults.dose_g),
-        # ("Grind setting", defaults.grind_setting),
     ]
-    result = await request_form(app, fields)
+    if needs_grind_setting:
+        default_grind_setting = "" if defaults.grind_setting is None else str(defaults.grind_setting)
+        fields.append(("Grind setting", default_grind_setting))
 
-    defaults.bean_name = result["Bean name"].replace(" ", "")
-    defaults.roast_date = result["Roast date"]
-    defaults.open_date = result["Bag opened date"]
+    while True:
+        result = await request_form(app, fields)
+        if result is None:
+            logger.warning("Pre-shot form returned no result; prompting again")
+            continue
+
+        grind_setting = None
+        if needs_grind_setting:
+            grind_setting = _normalize_grind_setting(result["Grind setting"])
+            if grind_setting is None:
+                logger.warning("Grind setting is required and must be numeric")
+                fields = [
+                    ("Bean name", result["Bean name"]),
+                    ("Roast date", result["Roast date"]),
+                    ("Bag opened date", result["Bag opened date"]),
+                    ("Grind setting", result["Grind setting"].strip()),
+                ]
+                continue
+
+        defaults.bean_name = result["Bean name"].replace(" ", "")
+        defaults.roast_date = result["Roast date"]
+        defaults.open_date = result["Bag opened date"]
+        if grind_setting is not None:
+            defaults.grind_setting = grind_setting
+        break
+
     # defaults.dose_g = result["Dose (g)"]
     # app.dose = float(result["Dose (g)"])
-    # defaults.grind_setting = result["Grind setting"]
-
-    app.previous_grind_rec = defaults.previous_grind_rec
     app.bean_name = defaults.bean_name
     if save:
         defaults.save() # save to file
