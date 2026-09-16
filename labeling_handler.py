@@ -199,6 +199,8 @@ async def label_shot(defaults: ShotDefaults, curve_path: Path, app: "AppState") 
         "shot_time_s": f"{_read_shot_duration(curve_path):.2f}",
     }
 
+    app.shot_id = row["shot_id"]
+
     if label == "discard":
         row.update({k: "" for k in MANIFEST_COLUMNS if k not in row})
         return row, label

@@ -3,9 +3,13 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
+
+import pandas as pd
 import pygame
 import re
 import math
+from anomaly_manager import retrieve_anomaly
+
 from typing import TYPE_CHECKING
 import logging
 from logging_setup import configure_logging
@@ -60,6 +64,7 @@ class State(Enum):
     POST_LABELING = auto()
     PREDICTED_LABEL = auto()
     PREDICTED_GRIND = auto()
+    ANOMALY = auto()
     SUMMARY = auto()
 
 # States where the graph is docked to the bottom of the screen
@@ -76,6 +81,9 @@ class AppState:
     result_probs: dict[str, float] | None = None
     previous_grind_rec: str | None = None
     manifest_path: Path | None = None
+    shot_id: str | None = None
+    anomaly_count: int = 0
+    anomaly_result: tuple[pd.DataFrame, pd.DataFrame] | None = None
     gp_result: dict | None = None
     bean_name: str | None = None
     grind_rec: float | None = None
@@ -112,6 +120,7 @@ class AppState:
 
     # 0 = spray beans, 1 = grind beans, 2 = wdt, 3 = level, 4 = tamp
     puck_prep_state: int | None = None
+    current_anomaly_state: int = 0
     state_entered_at: float | None = None
 
     def add_point(self, elapsed: float, weight: float) -> None:
@@ -293,7 +302,8 @@ def draw_boot(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
 
 def draw_labeling(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     bg = load_background(BEANS_DIR, RES)
-    surface.blit(bg, (0, 0))
+    if bg is not None:
+        surface.blit(bg, (0, 0))
 
     text(surface, font, "LABEL SHOT", HEADER_POS, AMBER)
     text(surface, font, "ENTER: next field", FOOTER_POS, GRID)
@@ -318,7 +328,8 @@ def draw_prepping(surface: pygame.Surface, app: AppState, font, dt: float) -> No
     elif app.puck_prep_state == 0:
         # text(surface, font, "SPRAY BEANS", HEADER_POS, AMBER)
         frame = load_background(SPRAY_DIR, RES)
-        surface.blit(frame, (0, 0))
+        if frame is not None:
+            surface.blit(frame, (0, 0))
     elif app.puck_prep_state == 1:
         # text(surface, font, "GRIND BEANS", HEADER_POS, AMBER)
         _draw_animated(surface, app, font, app.grind_anim, dt, "GRIND BEANS", AMBER)
@@ -492,7 +503,7 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
     else:
         TARGET_W = 38.0 # assume 19g dose
 
-    TARGET_F = TARGET_W / 27.5 # assume ~27.5s shot time
+    TARGET_F = TARGET_W / 25.0 # assume ~25s shot time
     TOL_W, TOL_F = 6.0, 0.6 # arbitrary tolerances for color gradient
     TIME_GRID_STEP = 5.0 # seconds
     WEIGHT_GRID_STEP = 5.0 # grams
@@ -531,7 +542,7 @@ def draw_live_graph(surface, dose, points, rect, font, gradient = True,
     f_color = _lerp_color(GRAPH_F, CYAN, _proximity(cur_f, TARGET_F, TOL_F))
 
     # Display important values
-    avg_f = sum(flows[-5:]) / min(len(flows), 5) if flows else 0.0
+    avg_f = sum(flows[-10:]) / min(len(flows), 10) if flows else 0.0
     text(surface, font, f"{cur_w:.2f}g", (x0 + 20, FOOTER_POS[1]), w_color)
     text(surface, font, f"{avg_f:.1f}g/s", (x0 + w - 39 - 50, FOOTER_POS[1]), f_color)
 
@@ -707,16 +718,10 @@ def draw_predicted_grind(surface: pygame.Surface, app: AppState, font, dt: float
             return x0 + w / 2
         return x0 + (grind - min_grind) / (max_grind - min_grind) * w
 
-    def _draw_manifest_points(surface, manifest, progress, size, x0, y0, w, h):
+    def _draw_manifest_points(surface, manifest, progress, size, x0, y0, w, h,
+                              min_grind, max_grind, min_shot_time, max_shot_time):
         if not manifest:
             return
-
-        min_grind_setting = min(entry['grind_setting'] for entry in manifest)
-        max_grind_setting = max(entry['grind_setting'] for entry in manifest)
-        min_shot_time = min(entry['shot_time_s'] for entry in manifest)
-        max_shot_time = max(entry['shot_time_s'] for entry in manifest)
-        grind_span = max_grind_setting - min_grind_setting
-        shot_span = max_shot_time - min_shot_time
 
         fade_window = 0.16
         denom = max(1, len(manifest) - 1)
@@ -739,14 +744,11 @@ def draw_predicted_grind(surface: pygame.Surface, app: AppState, font, dt: float
             elif entry['label'] == 'over':
                 color = RED
 
-            x_norm = 0.5 if grind_span == 0 else (grind_setting - min_grind_setting) / grind_span
-            y_norm = 0.5 if shot_span == 0 else (shot_time - min_shot_time) / shot_span
-            x = x0 + x_norm * w
-            y = y0 + h - y_norm * h
+            x = _grind_to_x(grind_setting, min_grind, max_grind, x0, w)
+            y = _time_to_y(shot_time, min_shot_time, max_shot_time, y0, h)
             pygame.draw.circle(point_surface, (*color, alpha), (int(x), int(y)), size)
 
         surface.blit(point_surface, (0, 0))
-        return max_shot_time, min_shot_time, max_grind_setting, min_grind_setting
 
     def _draw_ideal_time_band(surface, max_shot_time, min_shot_time, progress, x0, y0, w, h):
         band_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
@@ -842,11 +844,23 @@ def draw_predicted_grind(surface: pygame.Surface, app: AppState, font, dt: float
         surface.blit(line_surface, (0, 0))
 
 
+    candidates = app.gp_result.get('all_candidates')
+    if candidates is not None and len(candidates) > 0:
+        min_grind = float(min(candidates))
+        max_grind = float(max(candidates))
+    else:
+        min_grind = min(entry['grind_setting'] for entry in sorted_manifest)
+        max_grind = max(entry['grind_setting'] for entry in sorted_manifest)
+
+    min_shot_time = min(entry['shot_time_s'] for entry in sorted_manifest)
+    max_shot_time = max(entry['shot_time_s'] for entry in sorted_manifest)
+
     elapsed = time.monotonic() - (app.state_entered_at or 0)
     progress = min(1.0, elapsed / TIME_TO_DRAW)
     progress = progress * progress * (3.0 - 2.0 * progress)
-    max_shot_time, min_shot_time, max_grind, min_grind = _draw_manifest_points(surface, sorted_manifest, progress,
-                                                                               size=2, x0=x0, y0=y0, w=w, h=h)
+    _draw_manifest_points(surface, sorted_manifest, progress, size=2, x0=x0, y0=y0, w=w, h=h,
+                          min_grind=min_grind, max_grind=max_grind,
+                          min_shot_time=min_shot_time, max_shot_time=max_shot_time)
     _draw_ideal_time_band(surface, max_shot_time, min_shot_time, progress, x0, y0, w, h)
 
     elapsed = elapsed - TIME_TO_DRAW
@@ -860,9 +874,117 @@ def draw_predicted_grind(surface: pygame.Surface, app: AppState, font, dt: float
     progress = progress * progress * (3.0 - 2.0 * progress)
     _draw_recommendation(surface, app, font, max_grind, min_grind, progress)
 
+def draw_anomaly(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
+    if app.shot_id is None:
+        logger.warning("AppState has no shot_id. Cannot retrieve anomaly data.")
+        app.state = State.SUMMARY
+        return
+
+    if app.anomaly_result is None:
+        app.anomaly_result = retrieve_anomaly(app.shot_id, app.manifest_path.parent, app.manifest_path.parent)
+
+    if app.anomaly_result is None:
+        logger.warning(f"No anomaly data found for shot_id {app.shot_id}.")
+        app.state = State.SUMMARY
+        return
+
+    output_dict, dist_features = app.anomaly_result
+    if output_dict is None:
+        logger.info(f"No anomalies detected for shot {app.shot_id}.")
+        app.state = State.SUMMARY
+        return
+
+    TIME_TO_DRAW = 1.0  # seconds
+    x0, y0, w, h = 26, 27, RES[0] - 53, RES[1] - 53
+
+    def _normal_pdf(x, mean, std):
+        """Calculates the probability density function of a normal distribution."""
+        if std <= 0:
+            return 0.0
+        coeff = 1.0 / (std * math.sqrt(2 * math.pi))
+        exponent = -((x - mean) ** 2) / (2 * std ** 2)
+        return coeff * math.exp(exponent)
+
+    app.anomaly_count = len(output_dict) - 1
+    from itertools import islice
+    feature = next(islice(output_dict, app.anomaly_count, None))
+    text(surface, font, f"{feature}", HEADER_POS, RED)
+    value = output_dict[feature]['value']
+    zscore = output_dict[feature]['zscore']
+    dist = dist_features[dist_features['feature_name'] == feature]
+    mean, std = dist['median'].values[0], dist['robust_spread'].values[0]
+    x_range = abs(zscore) + 1.0
+    x_min, x_max = mean - x_range * std, mean + x_range * std
+    y_min, y_max = 0.0, _normal_pdf(mean, mean, std) * 1.1
+    logger.debug(f"Feature {feature}: Mean={mean}, Std={std}")
+
+    def _x_to_pixel(x):
+        return x0 + (x - x_min) / (x_max - x_min) * w
+
+    def _y_to_pixel(y):
+        return y0 + h - (y - y_min) / (y_max - y_min) * h
+
+    def _draw_normal_curve(surface, mean, std, progress):
+        """Draws the normal distribution curve."""
+        points = []
+        num_points = 100
+        progress_points = int(num_points * progress)
+        for i in range(progress_points + 1):
+            x = x_min + (x_max - x_min) * i / num_points
+            y = _normal_pdf(x, mean, std)
+            px = _x_to_pixel(x)
+            py = _y_to_pixel(y)
+            points.append((px, py))
+        if len(points) >= 2:
+            pygame.draw.lines(surface, CYAN, False, points, 1)
+
+    def _fill_normal_curve(surface, mean, std, progress):
+        """Fills the area under the normal distribution curve."""
+        points = []
+        num_points = 100
+        alpha = int(255 * progress * 0.1)
+        normal_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        for i in range(num_points + 1):
+            x = x_min + (x_max - x_min) * i / num_points
+            y = _normal_pdf(x, mean, std)
+            px = _x_to_pixel(x)
+            py = _y_to_pixel(y)
+            points.append((px, py))
+        if points:
+            points.append((_x_to_pixel(x_max), _y_to_pixel(0)))
+            points.append((_x_to_pixel(x_min), _y_to_pixel(0)))
+            pygame.draw.polygon(normal_surface, (*CYAN, alpha), points)
+            surface.blit(normal_surface, (0, 0))
+
+    def _draw_vertical_line(surface, value, progress, dash_length=0, color=RED):
+        """Draws a vertical line at the observed value."""
+        px = _x_to_pixel(value)
+        alpha = int(255 * progress)
+        line_surface = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+        if dash_length > 0:
+            for y in range(y0, y0 + h, dash_length * 2):
+                pygame.draw.line(line_surface, (*color, alpha), (px, y), (px, y + dash_length), 1)
+        else:
+            pygame.draw.line(line_surface, (*color, alpha), (px, y0), (px, y0 + h), 1)
+        surface.blit(line_surface, (0, 0))
+
+    elapsed = time.monotonic() - (app.state_entered_at or 0)
+    progress = min(1.0, elapsed / TIME_TO_DRAW)
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    _draw_normal_curve(surface, mean, std, progress)
+
+    elapsed = elapsed - TIME_TO_DRAW
+    progress = min(1.0, elapsed / TIME_TO_DRAW) if elapsed >= 0 else 0.0
+    progress = progress * progress * (3.0 - 2.0 * progress)
+    _fill_normal_curve(surface, mean, std, progress)
+    _draw_vertical_line(surface, value, progress)
+    _draw_vertical_line(surface, mean + 2.5*std, progress, color=AMBER, dash_length=5)
+
+
 def draw_summary(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     bg = load_background(BG_DIR, RES)
-    surface.blit(bg, (0, 0))
+    if bg is not None:
+        surface.blit(bg, (0, 0))
     text(surface, font, "SUMMARY", HEADER_POS, AMBER)
     y = 30
 
@@ -897,6 +1019,7 @@ DRAW_FUNCS = {
     State.POST_LABELING: draw_post_labeling,
     State.PREDICTED_LABEL: draw_predicted_label,
     State.PREDICTED_GRIND: draw_predicted_grind,
+    State.ANOMALY: draw_anomaly,
     State.SUMMARY: draw_summary,
 }
 
@@ -1090,9 +1213,15 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
             elif event.type == pygame.KEYDOWN and app.state == State.PREDICTED_LABEL:
                 app.state = State.PREDICTED_GRIND
 
-            # Switch to summary
+            # Switch to anomaly
             elif event.type == pygame.KEYDOWN and app.state == State.PREDICTED_GRIND:
-                app.state = State.SUMMARY
+                app.state = State.ANOMALY
+
+            # Switch to summary
+            elif event.type == pygame.KEYDOWN and app.state == State.ANOMALY:
+                app.current_anomaly_state += 1
+                if app.current_anomaly_state > app.anomaly_count:
+                    app.state = State.SUMMARY
 
             # Force switch to idle
             elif event.type == pygame.KEYDOWN and app.state == State.SUMMARY:
@@ -1109,7 +1238,8 @@ async def run_display(app: AppState, fullscreen: bool = False) -> None:
             outgoing_snapshot = internal.copy()
             fading = True
             fade_elapsed = 0.0
-            if app.state == State.PREDICTED_LABEL or app.state == State.PREDICTED_GRIND or app.state == State.SUMMARY:
+            if app.state == State.PREDICTED_LABEL or app.state == State.PREDICTED_GRIND \
+                or app.state == State.ANOMALY or app.state == State.SUMMARY:
                 app.state_entered_at = time.monotonic() # Start timeout
             prev_state = app.state
 
@@ -1163,7 +1293,7 @@ async def _demo_fill_pre_shot_form(app: AppState, defaults: "ShotDefaults") -> N
     app.form_submit_event.set()
 
 
-async def _demo(draw_graph = True) -> None:
+async def _demo(draw_graph = True, shot_id: str | None = None) -> None:
     """
     Demo mode that replays a synthetic shot and runs the grind recommendation flow
     without requiring a physical scale.
@@ -1175,7 +1305,7 @@ async def _demo(draw_graph = True) -> None:
     from recommend_grind import update_grind_model, load_gp, recommend_next_grind, update_appstate_rec
 
     app = AppState()
-    app.result_timeout = 30.0  # short for the demo; use minutes in real use
+    app.result_timeout = 60.0  # short for the demo; use minutes in real use
     display_task = asyncio.create_task(run_display(app))
     app.state = State.IDLE
 
@@ -1217,7 +1347,13 @@ async def _demo(draw_graph = True) -> None:
             raise RuntimeError("Failed to fit GP model from synthetic manifest")
     print("Loaded GP model for synthetic dataset.")
 
-    shot = random.choice(manifest_rows)
+    if shot_id is None:
+        shot = random.choice(manifest_rows)
+    else:
+        app.shot_id = shot_id
+        shot = next((row for row in manifest_rows if row.get("shot_id") == shot_id), None)
+    if shot is None:
+        raise ValueError(f"Shot with ID {shot_id} not found in manifest.")
     curve_path = synthetic_dir / shot["curve_file"]
     defaults.grind_setting = shot["grind_setting"]
     app.dose = float(defaults.dose_g)
@@ -1289,4 +1425,4 @@ async def _demo(draw_graph = True) -> None:
 
 if __name__ == "__main__":
     configure_logging()
-    asyncio.run(_demo(draw_graph = False))
+    asyncio.run(_demo(draw_graph = False, shot_id='synth_0005'))
