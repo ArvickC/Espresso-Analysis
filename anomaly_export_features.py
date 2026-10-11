@@ -69,8 +69,8 @@ def export_features(shots_dir: Path, out_dir: Path, save: bool = True) -> tuple[
 
 def main():
     parser = argparse.ArgumentParser(description="Export shot features to tool-agnostic CSVs.")
-    parser.add_argument("--shots-dir", type=Path, default=Path("."))
-    parser.add_argument("--out-dir", type=Path, default=Path("."))
+    parser.add_argument("--shots-dir", type=Path, default=Path("./synthetic_shots"))
+    parser.add_argument("--out-dir", type=Path, default=Path("./synthetic_shots"))
     args = parser.parse_args()
 
     export_features(args.shots_dir, args.out_dir)
