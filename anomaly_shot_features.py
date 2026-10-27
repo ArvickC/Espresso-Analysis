@@ -71,6 +71,7 @@ def extract_shot_features(curve: pd.DataFrame, manifest_row: pd.Series) -> dict:
     return {
         "shot_id": manifest_row["shot_id"],
         "label": manifest_row.get("label"),
+        "dose_g": dose_g if pd.notna(dose_g) else np.nan,
         "grind_setting": manifest_row.get("grind_setting"),
         "total_time_s": total_time_s,
         "final_yield_g": final_yield_g,
