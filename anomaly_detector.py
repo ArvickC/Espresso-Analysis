@@ -34,6 +34,25 @@ FEATURE_LABELS = {
 MAD_TO_STD = 1.4826  # Conversion factor from MAD to standard deviation
 MIN_VALID_SAMPLES = 3
 
+# Cache of built feature tables, keyed by shots_dir, invalidated when
+# manifest.csv's mtime changes. Avoids re-reading every curve file on disk
+# each time anomalies are checked against an unchanged shot directory.
+_feature_table_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+
+
+def _load_feature_table(shots_dir: Path) -> pd.DataFrame:
+    shots_dir = Path(shots_dir)
+    mtime = (shots_dir / "manifest.csv").stat().st_mtime
+    key = str(shots_dir)
+
+    cached = _feature_table_cache.get(key)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
+    feature_df = build_feature_table(shots_dir)
+    _feature_table_cache[key] = (mtime, feature_df)
+    return feature_df
+
 def robust_z_scores(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     z = pd.DataFrame(index=df.index)
     for col in columns:
@@ -101,7 +120,7 @@ def flag_shots_by_isolation_forest(feature_df: pd.DataFrame, contamination: str 
 
 
 def detect_anomalies(shots_dir: Path, threshold: float) -> pd.DataFrame:
-    feature_df = build_feature_table(shots_dir)
+    feature_df = _load_feature_table(shots_dir)
     flagged_df, _ = flag_shots_by_zscore(feature_df, threshold=threshold)
 
     logger.info(f"Loaded {len(feature_df)} shots from {shots_dir}")
@@ -116,28 +135,35 @@ def detect_anomalies(shots_dir: Path, threshold: float) -> pd.DataFrame:
     return flagged_df
 
 def detect_specified_anomalies(shots_dir: Path, threshold: float,
-                               shot_id: str | None = None) -> pd.DataFrame:
+                               shot_id: str | None = None, save: bool = False) -> pd.DataFrame:
     if shot_id is None:
         logger.info(f"No shot ID provided. Exiting...")
         return detect_anomalies(shots_dir, threshold)
 
-    feature_df = build_feature_table(shots_dir)
-    flagged_df, _ = flag_shots_by_zscore(feature_df, threshold=threshold)
+    shots_dir = Path(shots_dir)
+    manifest_ids = pd.read_csv(shots_dir / "manifest.csv", usecols=["shot_id"])["shot_id"]
+    if shot_id not in manifest_ids.values:
+        logger.info(f"Shot ID {shot_id} not found in {shots_dir}.")
+        return pd.DataFrame(columns=["shot_id", "label", "features", "zscores", "reasons"])
+
+    flagged_df = detect_anomalies(shots_dir, threshold)
     flagged_df = flagged_df[flagged_df["shot_id"] == shot_id]
-    logger.debug(f"Loaded {len(feature_df)} shots from {shots_dir}")
 
     if flagged_df.empty:
-        logger.info(f"No anomalies flagged (threshold={threshold}).")
+        logger.info(f"No anomalies flagged for {shot_id} (threshold={threshold}).")
         return flagged_df
 
     for _, row in flagged_df.iterrows():
         logger.debug(f"  {row['shot_id']} [{row['label']}]: {row['reasons']}")
 
+    if save:
+        output = shots_dir / f"flagged_{shot_id}.csv"
+        flagged_df.to_csv(output, index=False)
+        logger.info(f"Saved flagged-shot details to {output}")
+
     return flagged_df
 
-def main():
-    shots_dir = Path('./synthetic_shots')
-    threshold = 2.5
+def main(shots_dir: Path = Path('./synthetic_shots'), threshold: float = 2.5) -> None:
     output = shots_dir / 'flagged_shots.csv'
 
     flagged_df = detect_anomalies(
@@ -152,4 +178,4 @@ def main():
 
 if __name__ == "__main__":
     configure_logging()
-    main()
+    main(Path('./shots'))

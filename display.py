@@ -691,7 +691,7 @@ def draw_predicted_label(surface: pygame.Surface, app: AppState, font, dt: float
 
 def draw_predicted_grind(surface: pygame.Surface, app: AppState, font, dt: float) -> None:
     if app.grind_rec is None or app.pred_time is None or app.manifest_path is None or app.gp_result is None:
-        app.state = State.SUMMARY
+        app.state = State.ANOMALY
         return
 
     x0, y0, w, h = 26, 27, RES[0] - 53, RES[1] - 53
@@ -881,6 +881,9 @@ def draw_anomaly(surface: pygame.Surface, app: AppState, font, dt: float) -> Non
         return
 
     if app.anomaly_result is None:
+        if app.manifest_path is None:
+            logger.warning("AppState has no manifest_path. Falling back to './shots'.")
+            app.manifest_path = Path('./shots/manifest.csv')
         app.anomaly_result = retrieve_anomaly(app.shot_id, app.manifest_path.parent, app.manifest_path.parent)
 
     if app.anomaly_result is None:
@@ -979,6 +982,7 @@ def draw_anomaly(surface: pygame.Surface, app: AppState, font, dt: float) -> Non
     _fill_normal_curve(surface, mean, std, progress)
     _draw_vertical_line(surface, value, progress)
     _draw_vertical_line(surface, mean + 2.5*std, progress, color=AMBER, dash_length=5)
+    _draw_vertical_line(surface, mean - 2.5*std, progress, color=AMBER, dash_length=5)
 
 
 def draw_summary(surface: pygame.Surface, app: AppState, font, dt: float) -> None:

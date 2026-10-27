@@ -88,7 +88,9 @@ def matplot_anomaly_by_feature(feature: str, value: float, zscore: float,
     plt.fill_between(x, y, color='blue', alpha=0.1)
     plt.axvline(value, color='red', linestyle='--', label=f'Shot Value: {value:.2f}')
     plt.axvline(mean + threshold * std, color='orange', linestyle=':', alpha=0.4,
-                label=f'Mean + {threshold}σ: {mean + threshold * std:.2f}')
+                label=f'Mean ± {threshold}σ: {mean + threshold * std:.2f}')
+    plt.axvline(mean - threshold * std, color='orange', linestyle=':', alpha=0.4,
+                label=f'Mean ± {threshold}σ: {mean - threshold * std:.2f}')
 
     plt.title(f"Feature: {feature}")
     plt.xlabel('Values', fontsize=12)
@@ -99,5 +101,5 @@ def matplot_anomaly_by_feature(feature: str, value: float, zscore: float,
 
 if __name__ == "__main__":
     configure_logging()
-    synth_dir = Path('./synthetic_shots')
-    matplot_anomaly('synth_0026', shots_dir=synth_dir, out_dir=synth_dir)
+    synth_dir = Path('./shots')
+    matplot_anomaly('shot_20261007_121406', shots_dir=synth_dir, out_dir=synth_dir)

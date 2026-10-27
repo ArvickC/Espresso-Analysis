@@ -207,7 +207,8 @@ def plot_gp(gp: GPR, manifest: list[dict], result: dict | None = None, save_path
 
 if __name__ == "__main__":
     configure_logging()
-    manifest = _get_manifest(Path("./synthetic_shots/manifest.csv"), bean_name = "DemoBeans")
+    # manifest = _get_manifest(Path("./synthetic_shots/manifest.csv"), bean_name = "DemoBeans")
+    manifest = _get_manifest(Path("./shots/manifest.csv"), bean_name="BLDSBUXESP")
     if len(manifest) < MIN_SHOTS_FOR_GP:
         logger.info(f"Need >= {MIN_SHOTS_FOR_GP} labeled shots, and only have {len(manifest)}.")
     else:
